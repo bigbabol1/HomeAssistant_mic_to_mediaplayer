@@ -14,11 +14,30 @@ from homeassistant.helpers import selector
 
 from .const import (
     CONF_MEDIA_PLAYER,
+    CONF_PIPELINE_ID,
     CONF_SATELLITE_ENTITY,
     DOMAIN,
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _get_pipeline_options(hass) -> list[selector.SelectOptionDict]:
+    """Get available assist pipelines as select options."""
+    options: list[selector.SelectOptionDict] = [
+        selector.SelectOptionDict(value="preferred", label="Standard-Pipeline"),
+    ]
+    try:
+        from homeassistant.components.assist_pipeline import async_get_pipelines
+
+        pipelines = async_get_pipelines(hass)
+        for pipeline in pipelines:
+            options.append(
+                selector.SelectOptionDict(value=pipeline.id, label=pipeline.name)
+            )
+    except Exception:  # noqa: BLE001
+        _LOGGER.debug("Could not load assist pipelines")
+    return options
 
 
 class MicToMediaPlayerConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -41,8 +60,14 @@ class MicToMediaPlayerConfigFlow(ConfigFlow, domain=DOMAIN):
             if state is None:
                 errors["base"] = "satellite_not_found"
             else:
+                # Normalize pipeline_id
+                if user_input.get(CONF_PIPELINE_ID) == "preferred":
+                    user_input[CONF_PIPELINE_ID] = None
+
                 # Create a readable title
-                satellite_name = state.attributes.get("friendly_name", satellite_id)
+                satellite_name = state.attributes.get(
+                    "friendly_name", satellite_id
+                )
                 mp_state = self.hass.states.get(media_player_id)
                 mp_name = (
                     mp_state.attributes.get("friendly_name", media_player_id)
@@ -52,6 +77,8 @@ class MicToMediaPlayerConfigFlow(ConfigFlow, domain=DOMAIN):
                 title = f"{satellite_name} → {mp_name}"
                 return self.async_create_entry(title=title, data=user_input)
 
+        pipeline_options = _get_pipeline_options(self.hass)
+
         data_schema = vol.Schema(
             {
                 vol.Required(CONF_SATELLITE_ENTITY): selector.EntitySelector(
@@ -59,6 +86,14 @@ class MicToMediaPlayerConfigFlow(ConfigFlow, domain=DOMAIN):
                 ),
                 vol.Required(CONF_MEDIA_PLAYER): selector.EntitySelector(
                     selector.EntitySelectorConfig(domain="media_player")
+                ),
+                vol.Optional(
+                    CONF_PIPELINE_ID, default="preferred"
+                ): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=pipeline_options,
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                    )
                 ),
             }
         )
@@ -88,9 +123,12 @@ class MicToMediaPlayerOptionsFlow(OptionsFlow):
     ) -> FlowResult:
         """Manage the options."""
         if user_input is not None:
+            if user_input.get(CONF_PIPELINE_ID) == "preferred":
+                user_input[CONF_PIPELINE_ID] = None
             return self.async_create_entry(title="", data=user_input)
 
         current = self._config_entry.data
+        pipeline_options = _get_pipeline_options(self.hass)
 
         data_schema = vol.Schema(
             {
@@ -105,6 +143,15 @@ class MicToMediaPlayerOptionsFlow(OptionsFlow):
                     default=current.get(CONF_MEDIA_PLAYER, ""),
                 ): selector.EntitySelector(
                     selector.EntitySelectorConfig(domain="media_player")
+                ),
+                vol.Optional(
+                    CONF_PIPELINE_ID,
+                    default=current.get(CONF_PIPELINE_ID) or "preferred",
+                ): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=pipeline_options,
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                    )
                 ),
             }
         )

@@ -5,6 +5,7 @@ DOMAIN = "mic_to_mediaplayer"
 # Configuration keys
 CONF_SATELLITE_ENTITY = "satellite_entity_id"
 CONF_MEDIA_PLAYER = "media_player_entity_id"
+CONF_PIPELINE_ID = "pipeline_id"
 
 # Pipeline states
 STATE_IDLE = "idle"

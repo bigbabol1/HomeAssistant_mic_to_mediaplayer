@@ -11,6 +11,7 @@ from typing import Any
 
 from homeassistant.components.assist_pipeline import PipelineEvent, PipelineEventType
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import async_get_platforms
 from homeassistant.helpers.network import get_url
 
@@ -38,11 +39,13 @@ class PipelineInterceptor:
         hass: HomeAssistant,
         satellite_entity_id: str,
         media_player_entity_id: str,
+        pipeline_id: str | None = None,
     ) -> None:
         """Initialize the interceptor."""
         self.hass = hass
         self._satellite_entity_id = satellite_entity_id
         self._media_player_entity_id = media_player_entity_id
+        self._pipeline_id = pipeline_id
         self._satellite_entity: Any = None
         self._original_on_pipeline_event: Any = None
         self._active = False
@@ -81,6 +84,11 @@ class PipelineInterceptor:
         return self._media_player_entity_id
 
     @property
+    def pipeline_id(self) -> str | None:
+        """Return the configured pipeline ID."""
+        return self._pipeline_id
+
+    @property
     def is_active(self) -> bool:
         """Return True if the interceptor is patched and active."""
         return self._active
@@ -115,9 +123,8 @@ class PipelineInterceptor:
         entity = self._find_satellite_entity()
 
         if entity is None:
-            _LOGGER.error(
-                "Could not find satellite entity '%s'. "
-                "Make sure the entity is available and the integration is loaded",
+            _LOGGER.debug(
+                "Satellite entity '%s' not found yet",
                 self._satellite_entity_id,
             )
             return False
@@ -134,6 +141,11 @@ class PipelineInterceptor:
             self._satellite_entity_id,
             self._media_player_entity_id,
         )
+
+        # Apply pipeline preference to the satellite
+        if self._pipeline_id:
+            await self._apply_pipeline_preference()
+
         return True
 
     async def async_stop(self) -> None:
@@ -154,12 +166,134 @@ class PipelineInterceptor:
     # -- Entity lookup --
 
     def _find_satellite_entity(self) -> Any:
-        """Find the satellite entity object via entity platforms."""
-        platforms = async_get_platforms(self.hass, "assist_satellite")
-        for platform in platforms:
-            for entity in platform.entities.values():
-                if entity.entity_id == self._satellite_entity_id:
-                    return entity
+        """Find the satellite entity object.
+
+        Uses the entity registry to determine which integration provides the
+        satellite, then searches that integration's entity platforms.
+        """
+        entity_id = self._satellite_entity_id
+
+        # Strategy 1: Use entity registry to find the owning integration,
+        # then look up the entity object in that integration's platforms.
+        entity_reg = er.async_get(self.hass)
+        registry_entry = entity_reg.async_get(entity_id)
+
+        if registry_entry is not None:
+            integration = registry_entry.platform  # e.g. "wyoming", "esphome"
+            platforms = async_get_platforms(self.hass, integration)
+            for platform in platforms:
+                if platform.domain == "assist_satellite":
+                    entity = platform.entities.get(entity_id)
+                    if entity is not None:
+                        _LOGGER.debug(
+                            "Found satellite via integration '%s'", integration
+                        )
+                        return entity
+
+        # Strategy 2: Brute-force search across all known satellite providers.
+        for integration in ("wyoming", "esphome", "voip", "homeassistant"):
+            try:
+                platforms = async_get_platforms(self.hass, integration)
+            except Exception:  # noqa: BLE001
+                continue
+            for platform in platforms:
+                if platform.domain == "assist_satellite":
+                    entity = platform.entities.get(entity_id)
+                    if entity is not None:
+                        _LOGGER.debug(
+                            "Found satellite via fallback search '%s'",
+                            integration,
+                        )
+                        return entity
+
+        return None
+
+    # -- Pipeline preference --
+
+    async def _apply_pipeline_preference(self) -> None:
+        """Set the satellite's pipeline select entity to the configured pipeline."""
+        try:
+            from homeassistant.components.assist_pipeline import async_get_pipeline
+
+            pipeline = async_get_pipeline(self.hass, self._pipeline_id)
+            if pipeline is None:
+                _LOGGER.warning("Pipeline '%s' not found", self._pipeline_id)
+                return
+
+            pipeline_name = pipeline.name
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug("Could not resolve pipeline name", exc_info=True)
+            return
+
+        # Find the satellite device's pipeline select entity
+        pipeline_select_id = self._find_pipeline_select_entity()
+        if pipeline_select_id is None:
+            _LOGGER.debug(
+                "No pipeline select entity found for satellite device"
+            )
+            return
+
+        # Read current options from the select entity
+        select_state = self.hass.states.get(pipeline_select_id)
+        if select_state is None:
+            return
+
+        options = select_state.attributes.get("options", [])
+
+        # Find the matching option (pipeline name or "preferred")
+        target_option = None
+        for option in options:
+            if option.lower() == pipeline_name.lower():
+                target_option = option
+                break
+
+        if target_option is None:
+            _LOGGER.warning(
+                "Pipeline '%s' not found in select options %s",
+                pipeline_name,
+                options,
+            )
+            return
+
+        try:
+            await self.hass.services.async_call(
+                "select",
+                "select_option",
+                {
+                    "entity_id": pipeline_select_id,
+                    "option": target_option,
+                },
+                blocking=True,
+            )
+            _LOGGER.info(
+                "Set satellite pipeline to '%s' via %s",
+                target_option,
+                pipeline_select_id,
+            )
+        except Exception:  # noqa: BLE001
+            _LOGGER.warning(
+                "Could not set pipeline on %s", pipeline_select_id
+            )
+
+    def _find_pipeline_select_entity(self) -> str | None:
+        """Find the pipeline select entity belonging to the satellite's device."""
+        entity_reg = er.async_get(self.hass)
+        satellite_entry = entity_reg.async_get(self._satellite_entity_id)
+
+        if satellite_entry is None or satellite_entry.device_id is None:
+            return None
+
+        # Find all entities for the satellite's device
+        device_entities = er.async_entries_for_device(
+            entity_reg, satellite_entry.device_id
+        )
+
+        for entry in device_entities:
+            if entry.domain == "select" and "pipeline" in (
+                entry.original_name or entry.entity_id
+            ).lower():
+                return entry.entity_id
+
         return None
 
     # -- Pipeline event handling --

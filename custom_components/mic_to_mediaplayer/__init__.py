@@ -12,7 +12,13 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
 from homeassistant.core import HomeAssistant, callback
 
-from .const import CONF_MEDIA_PLAYER, CONF_SATELLITE_ENTITY, DOMAIN, PLATFORMS
+from .const import (
+    CONF_MEDIA_PLAYER,
+    CONF_PIPELINE_ID,
+    CONF_SATELLITE_ENTITY,
+    DOMAIN,
+    PLATFORMS,
+)
 from .interceptor import PipelineInterceptor
 
 _LOGGER = logging.getLogger(__name__)
@@ -24,9 +30,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     satellite_entity_id = entry.data[CONF_SATELLITE_ENTITY]
     media_player_entity_id = entry.data[CONF_MEDIA_PLAYER]
+    pipeline_id = entry.data.get(CONF_PIPELINE_ID)
 
     interceptor = PipelineInterceptor(
-        hass, satellite_entity_id, media_player_entity_id
+        hass, satellite_entity_id, media_player_entity_id, pipeline_id
     )
     hass.data[DOMAIN][entry.entry_id] = interceptor
 
@@ -44,7 +51,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 "Will retry when the entity becomes available",
                 satellite_entity_id,
             )
-            # Set up a state listener to retry when the entity appears
             _setup_retry_listener(hass, entry, interceptor)
 
     if hass.is_running:
@@ -62,15 +68,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 def _setup_retry_listener(
     hass: HomeAssistant, entry: ConfigEntry, interceptor: PipelineInterceptor
 ) -> None:
-    """Listen for state changes and retry attaching when the satellite appears."""
+    """Listen for the specific satellite entity to appear and retry attaching."""
     satellite_entity_id = entry.data[CONF_SATELLITE_ENTITY]
+    retry_logged = False
 
     @callback
     def _state_changed(event) -> None:
-        """Check if the satellite entity has appeared."""
+        """Retry attaching when the target satellite entity fires a state change."""
+        nonlocal retry_logged
         entity_id = event.data.get("entity_id")
-        if entity_id == satellite_entity_id and not interceptor.is_active:
-            hass.async_create_task(_try_attach())
+        if entity_id != satellite_entity_id or interceptor.is_active:
+            return
+
+        if not retry_logged:
+            _LOGGER.debug(
+                "Satellite '%s' state changed, attempting to attach",
+                satellite_entity_id,
+            )
+            retry_logged = True
+
+        hass.async_create_task(_try_attach())
 
     async def _try_attach() -> None:
         success = await interceptor.async_start()

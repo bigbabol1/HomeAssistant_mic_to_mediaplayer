@@ -78,6 +78,7 @@ class PipelineStateSensor(SensorEntity):
             "pipeline_state": self._interceptor.state,
             "satellite_entity": self._interceptor.satellite_entity_id,
             "media_player_entity": self._interceptor.media_player_entity_id,
+            "pipeline_id": self._interceptor.pipeline_id,
             "interceptor_active": self._interceptor.is_active,
         }
         if self._interceptor.last_text:
