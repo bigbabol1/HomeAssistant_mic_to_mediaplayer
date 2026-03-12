@@ -3,9 +3,9 @@
   "name": "Mic to MediaPlayer",
   "codeowners": ["@bigbabol1"],
   "config_flow": true,
-  "dependencies": ["assist_pipeline", "media_player", "stt", "tts"],
+  "dependencies": ["assist_pipeline", "assist_satellite", "media_player"],
   "documentation": "https://github.com/bigbabol1/HomeAssistant_mic_to_mediaplayer",
   "iot_class": "local_push",
-  "requirements": ["wyoming>=1.5.0"],
+  "requirements": [],
   "version": "1.0.0"
 }
