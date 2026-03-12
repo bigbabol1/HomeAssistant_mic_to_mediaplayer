@@ -1,5 +1,7 @@
 # Mic to MediaPlayer
 
+Hier ist sie endlich - die Integration, die es dir ermöglicht deine Assist-Pipeline so zu konfigurieren, wie du es möchtest!
+
 Home Assistant Custom Integration: Nutze jede **Assist Satellite** Entität (z.B. die **Assist Microphone** App, Wyoming Satellites, ESPHome Satellites) als Spracheingabe und spiele die TTS-Antwort des Assistenten auf einem beliebigen **Media Player** ab.
 
 ## Features
