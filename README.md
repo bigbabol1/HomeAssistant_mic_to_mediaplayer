@@ -1,24 +1,26 @@
 # Mic to MediaPlayer
 
-Home Assistant Custom Integration: Nutze ein über das **Wyoming Protocol** eingebundenes Mikrofon für Spracheingabe und spiele die TTS-Antwort deines Assistenten auf einem beliebigen **Media Player** ab.
+Home Assistant Custom Integration: Nutze jede **Assist Satellite** Entität (z.B. die **Assist Microphone** App, Wyoming Satellites, ESPHome Satellites) als Spracheingabe und spiele die TTS-Antwort des Assistenten auf einem beliebigen **Media Player** ab.
 
 ## Features
 
-- **Wyoming-Mikrofon als Eingang**: Verbindet sich direkt mit einem Wyoming-Dienst (Satellite/Mikrofon) per TCP
-- **Assist-Pipeline-Integration**: Nutzt die eingebaute Home Assistant Assist Pipeline (STT → Conversation → TTS)
-- **Flexible Media-Player-Ausgabe**: TTS-Antwort wird auf einem frei wählbaren Media Player abgespielt
-- **Push-to-Talk Button**: Ein Button-Entity startet die Sprachaufnahme per Klick oder Automation
-- **Status-Sensor**: Zeigt den aktuellen Pipeline-Status (Bereit, Höre zu, Verarbeite, Antwort, Fehler)
-- **Konfigurierbarer Stille-Timeout**: VAD-basierte Erkennung, wann die Spracheingabe endet
-- **Service-Aufruf**: `mic_to_mediaplayer.listen` kann in Automationen verwendet werden
+- **Jeder Assist Satellite nutzbar**: Funktioniert mit allen `assist_satellite`-Entitäten – Assist Microphone App, Wyoming Satellites, ESPHome Voice Satellites, VoIP Satellites
+- **Flexible Media-Player-Ausgabe**: TTS-Antwort wird auf einem frei wählbaren Media Player abgespielt (Sonos, Google Cast, DLNA, etc.)
+- **Nicht-invasiv**: Klinkt sich über Instance-Level Patching in die bestehende Satellite-Entität ein, ohne globale Funktionen zu ändern
+- **Status-Sensor**: Zeigt den aktuellen Pipeline-Status (Bereit, Höre zu, Verarbeite, Antwort, Fehler) sowie den letzten erkannten Text und die Antwort
+- **Automatische Erkennung**: Wartet bei HA-Start automatisch auf die Verfügbarkeit der Satellite-Entität
+- **Mehrfach konfigurierbar**: Mehrere Satellite → Media Player Zuordnungen gleichzeitig möglich
 - **HACS-kompatibel**: Einfache Installation über HACS
 
 ## Voraussetzungen
 
-- Home Assistant 2024.1.0 oder neuer
-- Ein Wyoming-kompatibler Mikrofon-Dienst (z.B. [wyoming-satellite](https://github.com/rhasspy/wyoming-satellite))
+- Home Assistant 2024.10.0 oder neuer (für `assist_satellite`-Unterstützung)
+- Eine konfigurierte `assist_satellite`-Entität, z.B.:
+  - [Assist Microphone](https://www.home-assistant.io/voice_control/android/) (HA Companion App)
+  - [Wyoming Satellite](https://github.com/rhasspy/wyoming-satellite)
+  - [ESPHome Voice Satellite](https://esphome.io/components/voice_assistant/)
 - Eine konfigurierte Assist-Pipeline mit STT und TTS (z.B. Whisper + Piper)
-- Ein Media Player in Home Assistant (z.B. Sonos, Google Cast, DLNA, etc.)
+- Ein Media Player in Home Assistant
 
 ## Installation
 
@@ -39,67 +41,51 @@ Home Assistant Custom Integration: Nutze ein über das **Wyoming Protocol** eing
 
 1. Gehe zu **Einstellungen** → **Geräte & Dienste** → **Integration hinzufügen**
 2. Suche nach "Mic to MediaPlayer"
-3. Gib die Konfiguration ein:
-   - **Wyoming Host**: IP-Adresse deines Wyoming-Dienstes (z.B. `192.168.1.100`)
-   - **Wyoming Port**: Port des Wyoming-Dienstes (Standard: `10700`)
+3. Konfiguriere:
+   - **Assist Satellite**: Wähle die Satellite-Entität (z.B. dein Smartphone mit der Assist Microphone App)
    - **Media Player**: Wähle den Media Player für die TTS-Ausgabe
-   - **Assist-Pipeline**: Wähle die gewünschte Pipeline (oder Standard)
-   - **Sprache**: Optional – z.B. `de` für Deutsch
-   - **Stille-Erkennung**: Sekunden Stille bis die Aufnahme endet (Standard: 3s)
 
-## Verwendung
+Das war's! Die Integration klinkt sich automatisch in die Pipeline-Events der gewählten Satellite-Entität ein und spielt jede TTS-Antwort auf dem Media Player ab.
 
-### Button-Entity
+## Funktionsweise
 
-Die Integration erstellt einen "Zuhören starten" Button. Drücke ihn im Dashboard oder nutze ihn in Automationen:
-
-```yaml
-service: button.press
-target:
-  entity_id: button.mic_192_168_1_100_10700_media_player_wohnzimmer_zuhoren_starten
+```
+Assist Satellite (Mikrofon)
+        │
+        │ Spracheingabe → Assist Pipeline (STT → Conversation → TTS)
+        │
+        ├──→ Satellite spielt TTS ab (normal)
+        │
+        └──→ [Mic to MediaPlayer] fängt TTS-URL ab
+                       │
+                       ↓
+                  Media Player ♪
 ```
 
-### Service-Aufruf
+Die Integration nutzt **Instance-Level Patching** auf der `on_pipeline_event`-Methode der gewählten Satellite-Entität. Dadurch:
+- Werden Pipeline-Events (STT, Intent, TTS) abgefangen
+- Wird die TTS-URL bei Generierung erfasst
+- Wird die TTS-Audio auf dem Media Player abgespielt
+- Bleibt das Original-Verhalten des Satellites vollständig erhalten
 
-```yaml
-service: mic_to_mediaplayer.listen
-```
+## Status-Sensor
 
-### Automation Beispiel
+Der Sensor `sensor.*_pipeline_status` zeigt:
 
-```yaml
-automation:
-  - alias: "Sprachsteuerung per Knopfdruck"
-    trigger:
-      - platform: state
-        entity_id: binary_sensor.physischer_button
-        to: "on"
-    action:
-      - service: mic_to_mediaplayer.listen
-```
+| Status | Bedeutung |
+|---|---|
+| **Bereit** | Wartet auf Spracheingabe |
+| **Höre zu...** | Sprache wird aufgenommen |
+| **Verarbeite...** | STT und Conversation laufen |
+| **Antwort wird abgespielt** | TTS wird auf dem Media Player abgespielt |
+| **Fehler** | Ein Fehler ist aufgetreten |
 
-### Status-Sensor
-
-Der Sensor `sensor.*_pipeline_status` zeigt den aktuellen Zustand:
-- **Bereit** – Wartet auf Eingabe
-- **Verbinde...** – Verbindet mit Wyoming-Dienst
-- **Höre zu...** – Nimmt Sprache auf
-- **Verarbeite...** – STT und Conversation laufen
-- **Antwort wird abgespielt** – TTS wird auf dem Media Player abgespielt
-- **Fehler** – Ein Fehler ist aufgetreten
-
-Zusätzliche Attribute:
+**Zusätzliche Attribute:**
 - `last_speech_text`: Letzter erkannter Sprachtext
 - `last_response`: Letzte Antwort des Assistenten
-
-## Architektur
-
-```
-Wyoming Mikrofon ──TCP──→ [Integration] ──→ Assist Pipeline (STT → Intent → TTS)
-                                                        │
-                                                        ↓
-                                                   Media Player ♪
-```
+- `satellite_entity`: Die überwachte Satellite-Entität
+- `media_player_entity`: Der Ziel-Media-Player
+- `interceptor_active`: Ob die Interception aktiv ist
 
 ## Lizenz
 

@@ -3,27 +3,19 @@
     "step": {
       "user": {
         "title": "Set up Mic to MediaPlayer",
-        "description": "Connect a Wyoming microphone to a media player for voice control.",
+        "description": "Select an Assist Satellite entity as microphone source and a media player for TTS output.",
         "data": {
-          "wyoming_host": "Wyoming Host",
-          "wyoming_port": "Wyoming Port",
-          "media_player_entity_id": "Media Player for voice output",
-          "pipeline_id": "Assist Pipeline",
-          "language": "Language (empty = default)",
-          "silence_seconds": "Silence detection (seconds)"
+          "satellite_entity_id": "Assist Satellite (microphone source)",
+          "media_player_entity_id": "Media Player (TTS output)"
         },
         "data_description": {
-          "wyoming_host": "IP address or hostname of the Wyoming service (e.g. 192.168.1.100)",
-          "wyoming_port": "TCP port of the Wyoming service (default: 10700)",
-          "media_player_entity_id": "TTS response will be played on this media player",
-          "pipeline_id": "Which assist pipeline to use",
-          "language": "Language code e.g. 'en' for English, 'de' for German. Leave empty for the pipeline default language.",
-          "silence_seconds": "How many seconds of silence before recording stops"
+          "satellite_entity_id": "The satellite entity whose voice input should be monitored (e.g. Assist Microphone app, Wyoming Satellite, ESPHome Satellite).",
+          "media_player_entity_id": "The TTS response from the assistant will be played on this media player."
         }
       }
     },
     "error": {
-      "cannot_connect": "Cannot connect to Wyoming service. Please check host and port."
+      "satellite_not_found": "The selected satellite entity was not found. Please check if it is available."
     }
   },
   "options": {
@@ -31,10 +23,8 @@
       "init": {
         "title": "Mic to MediaPlayer Options",
         "data": {
-          "media_player_entity_id": "Media Player for voice output",
-          "pipeline_id": "Assist Pipeline",
-          "language": "Language (empty = default)",
-          "silence_seconds": "Silence detection (seconds)"
+          "satellite_entity_id": "Assist Satellite (microphone source)",
+          "media_player_entity_id": "Media Player (TTS output)"
         }
       }
     }

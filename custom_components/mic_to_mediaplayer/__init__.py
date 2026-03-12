@@ -1,7 +1,7 @@
 """The Mic to MediaPlayer integration.
 
-Connects a Wyoming Protocol microphone to Home Assistant's assist pipeline
-and plays TTS responses on a selected media player entity.
+Intercepts pipeline events from an assist_satellite entity and plays
+TTS responses on a selected media player entity.
 """
 
 from __future__ import annotations
@@ -9,43 +9,48 @@ from __future__ import annotations
 import logging
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
+from homeassistant.core import HomeAssistant, callback
 
-from .const import DOMAIN, PLATFORMS
-from .pipeline import VoicePipelineManager
+from .const import CONF_MEDIA_PLAYER, CONF_SATELLITE_ENTITY, DOMAIN, PLATFORMS
+from .interceptor import PipelineInterceptor
 
 _LOGGER = logging.getLogger(__name__)
 
-type MicToMediaPlayerConfigEntry = ConfigEntry
 
-
-async def async_setup_entry(hass: HomeAssistant, entry: MicToMediaPlayerConfigEntry) -> bool:
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Mic to MediaPlayer from a config entry."""
     hass.data.setdefault(DOMAIN, {})
 
-    # Create the pipeline manager
-    manager = VoicePipelineManager(hass, dict(entry.data))
-    hass.data[DOMAIN][entry.entry_id] = manager
+    satellite_entity_id = entry.data[CONF_SATELLITE_ENTITY]
+    media_player_entity_id = entry.data[CONF_MEDIA_PLAYER]
 
-    # Register a service to trigger listening
-    async def handle_listen(call: ServiceCall) -> None:
-        """Handle the listen service call."""
-        entry_id = call.data.get("entry_id")
-        if entry_id and entry_id in hass.data[DOMAIN]:
-            mgr = hass.data[DOMAIN][entry_id]
-        elif len(hass.data[DOMAIN]) == 1:
-            # If only one entry, use it
-            mgr = next(iter(hass.data[DOMAIN].values()))
-        else:
-            _LOGGER.error("Please specify entry_id when multiple instances are configured")
-            return
-        await mgr.run()
+    interceptor = PipelineInterceptor(
+        hass, satellite_entity_id, media_player_entity_id
+    )
+    hass.data[DOMAIN][entry.entry_id] = interceptor
 
-    if not hass.services.has_service(DOMAIN, "listen"):
-        hass.services.async_register(DOMAIN, "listen", handle_listen)
-
-    # Forward setup to platforms
+    # Forward setup to platforms (sensor) before starting the interceptor
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+    # The satellite entity may not be available yet during HA startup.
+    # Defer interceptor activation until HA is fully started.
+    async def _start_interceptor(_event=None) -> None:
+        """Activate the interceptor once all entities are available."""
+        success = await interceptor.async_start()
+        if not success:
+            _LOGGER.warning(
+                "Could not attach to satellite '%s'. "
+                "Will retry when the entity becomes available",
+                satellite_entity_id,
+            )
+            # Set up a state listener to retry when the entity appears
+            _setup_retry_listener(hass, entry, interceptor)
+
+    if hass.is_running:
+        await _start_interceptor()
+    else:
+        hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _start_interceptor)
 
     # Listen for options updates
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
@@ -53,20 +58,44 @@ async def async_setup_entry(hass: HomeAssistant, entry: MicToMediaPlayerConfigEn
     return True
 
 
+@callback
+def _setup_retry_listener(
+    hass: HomeAssistant, entry: ConfigEntry, interceptor: PipelineInterceptor
+) -> None:
+    """Listen for state changes and retry attaching when the satellite appears."""
+    satellite_entity_id = entry.data[CONF_SATELLITE_ENTITY]
+
+    @callback
+    def _state_changed(event) -> None:
+        """Check if the satellite entity has appeared."""
+        entity_id = event.data.get("entity_id")
+        if entity_id == satellite_entity_id and not interceptor.is_active:
+            hass.async_create_task(_try_attach())
+
+    async def _try_attach() -> None:
+        success = await interceptor.async_start()
+        if success:
+            unsub()
+
+    unsub = hass.bus.async_listen("state_changed", _state_changed)
+    entry.async_on_unload(unsub)
+
+
 async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Handle options update."""
+    """Handle options update by reloading the entry."""
     await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
+    interceptor: PipelineInterceptor | None = hass.data[DOMAIN].get(entry.entry_id)
+
+    if interceptor:
+        await interceptor.async_stop()
+
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
     if unload_ok:
         hass.data[DOMAIN].pop(entry.entry_id, None)
-
-    # Remove service if no more entries
-    if not hass.data.get(DOMAIN):
-        hass.services.async_remove(DOMAIN, "listen")
 
     return unload_ok

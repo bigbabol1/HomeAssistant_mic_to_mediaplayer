@@ -3,27 +3,19 @@
     "step": {
       "user": {
         "title": "Mic to MediaPlayer einrichten",
-        "description": "Verbinde ein Wyoming-Mikrofon mit einem Media Player für Sprachsteuerung.",
+        "description": "Wähle eine Assist-Satellite-Entität als Mikrofon-Quelle und einen Media Player für die TTS-Ausgabe.",
         "data": {
-          "wyoming_host": "Wyoming Host",
-          "wyoming_port": "Wyoming Port",
-          "media_player_entity_id": "Media Player für Sprachausgabe",
-          "pipeline_id": "Assist-Pipeline",
-          "language": "Sprache (leer = Standard)",
-          "silence_seconds": "Stille-Erkennung (Sekunden)"
+          "satellite_entity_id": "Assist Satellite (Mikrofon-Quelle)",
+          "media_player_entity_id": "Media Player (TTS-Ausgabe)"
         },
         "data_description": {
-          "wyoming_host": "IP-Adresse oder Hostname des Wyoming-Dienstes (z.B. 192.168.1.100)",
-          "wyoming_port": "TCP-Port des Wyoming-Dienstes (Standard: 10700)",
-          "media_player_entity_id": "Auf diesem Media Player wird die TTS-Antwort abgespielt",
-          "pipeline_id": "Welche Assist-Pipeline soll verwendet werden",
-          "language": "Sprachcode z.B. 'de' für Deutsch, 'en' für Englisch. Leer lassen für die Standardsprache der Pipeline.",
-          "silence_seconds": "Wie viele Sekunden Stille bis die Aufnahme beendet wird"
+          "satellite_entity_id": "Die Satellite-Entität, deren Spracheingabe überwacht werden soll (z.B. Assist Microphone App, Wyoming Satellite, ESPHome Satellite).",
+          "media_player_entity_id": "Auf diesem Media Player wird die TTS-Antwort des Assistenten abgespielt."
         }
       }
     },
     "error": {
-      "cannot_connect": "Verbindung zum Wyoming-Dienst fehlgeschlagen. Bitte Host und Port prüfen."
+      "satellite_not_found": "Die gewählte Satellite-Entität wurde nicht gefunden. Bitte prüfe, ob sie verfügbar ist."
     }
   },
   "options": {
@@ -31,10 +23,8 @@
       "init": {
         "title": "Mic to MediaPlayer Optionen",
         "data": {
-          "media_player_entity_id": "Media Player für Sprachausgabe",
-          "pipeline_id": "Assist-Pipeline",
-          "language": "Sprache (leer = Standard)",
-          "silence_seconds": "Stille-Erkennung (Sekunden)"
+          "satellite_entity_id": "Assist Satellite (Mikrofon-Quelle)",
+          "media_player_entity_id": "Media Player (TTS-Ausgabe)"
         }
       }
     }
