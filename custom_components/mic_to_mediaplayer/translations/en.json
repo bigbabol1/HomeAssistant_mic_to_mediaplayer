@@ -1,0 +1,42 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Set up Mic to MediaPlayer",
+        "description": "Connect a Wyoming microphone to a media player for voice control.",
+        "data": {
+          "wyoming_host": "Wyoming Host",
+          "wyoming_port": "Wyoming Port",
+          "media_player_entity_id": "Media Player for voice output",
+          "pipeline_id": "Assist Pipeline",
+          "language": "Language (empty = default)",
+          "silence_seconds": "Silence detection (seconds)"
+        },
+        "data_description": {
+          "wyoming_host": "IP address or hostname of the Wyoming service (e.g. 192.168.1.100)",
+          "wyoming_port": "TCP port of the Wyoming service (default: 10700)",
+          "media_player_entity_id": "TTS response will be played on this media player",
+          "pipeline_id": "Which assist pipeline to use",
+          "language": "Language code e.g. 'en' for English, 'de' for German. Leave empty for the pipeline default language.",
+          "silence_seconds": "How many seconds of silence before recording stops"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot connect to Wyoming service. Please check host and port."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Mic to MediaPlayer Options",
+        "data": {
+          "media_player_entity_id": "Media Player for voice output",
+          "pipeline_id": "Assist Pipeline",
+          "language": "Language (empty = default)",
+          "silence_seconds": "Silence detection (seconds)"
+        }
+      }
+    }
+  }
+}
