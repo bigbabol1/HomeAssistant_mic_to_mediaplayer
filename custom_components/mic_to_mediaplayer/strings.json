@@ -1,0 +1,54 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Mic to MediaPlayer einrichten",
+        "description": "Verbinde ein Wyoming-Mikrofon mit einem Media Player für Sprachsteuerung.",
+        "data": {
+          "wyoming_host": "Wyoming Host",
+          "wyoming_port": "Wyoming Port",
+          "media_player_entity_id": "Media Player für Sprachausgabe",
+          "pipeline_id": "Assist-Pipeline",
+          "language": "Sprache (leer = Standard)",
+          "silence_seconds": "Stille-Erkennung (Sekunden)"
+        },
+        "data_description": {
+          "wyoming_host": "IP-Adresse oder Hostname des Wyoming-Dienstes (z.B. 192.168.1.100)",
+          "wyoming_port": "TCP-Port des Wyoming-Dienstes (Standard: 10700)",
+          "media_player_entity_id": "Auf diesem Media Player wird die TTS-Antwort abgespielt",
+          "pipeline_id": "Welche Assist-Pipeline soll verwendet werden",
+          "language": "Sprachcode z.B. 'de' für Deutsch, 'en' für Englisch. Leer lassen für die Standardsprache der Pipeline.",
+          "silence_seconds": "Wie viele Sekunden Stille bis die Aufnahme beendet wird"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Verbindung zum Wyoming-Dienst fehlgeschlagen. Bitte Host und Port prüfen."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Mic to MediaPlayer Optionen",
+        "data": {
+          "media_player_entity_id": "Media Player für Sprachausgabe",
+          "pipeline_id": "Assist-Pipeline",
+          "language": "Sprache (leer = Standard)",
+          "silence_seconds": "Stille-Erkennung (Sekunden)"
+        }
+      }
+    }
+  },
+  "services": {
+    "listen": {
+      "name": "Zuhören",
+      "description": "Startet die Sprachaufnahme über das Wyoming-Mikrofon und gibt die Antwort über den Media Player aus.",
+      "fields": {
+        "entry_id": {
+          "name": "Config Entry ID",
+          "description": "Die ID des Konfigurationseintrags (nur nötig bei mehreren Instanzen)"
+        }
+      }
+    }
+  }
+}
