@@ -80,6 +80,7 @@ class PipelineStateSensor(SensorEntity):
             "media_player_entity": self._interceptor.media_player_entity_id,
             "pipeline_id": self._interceptor.pipeline_id,
             "interceptor_active": self._interceptor.is_active,
+            "alexa_tts_mode": self._interceptor.is_alexa,
         }
         if self._interceptor.last_text:
             attrs["last_speech_text"] = self._interceptor.last_text
