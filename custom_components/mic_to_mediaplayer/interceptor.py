@@ -49,6 +49,7 @@ class PipelineInterceptor:
         self._satellite_entity: Any = None
         self._original_on_pipeline_event: Any = None
         self._active = False
+        self._is_alexa: bool = False
 
         # State tracking
         self._state = STATE_IDLE
@@ -93,6 +94,11 @@ class PipelineInterceptor:
         """Return True if the interceptor is patched and active."""
         return self._active
 
+    @property
+    def is_alexa(self) -> bool:
+        """Return True if the media player is an Alexa device."""
+        return self._is_alexa
+
     # -- State management --
 
     def add_state_listener(self, listener) -> None:
@@ -136,10 +142,15 @@ class PipelineInterceptor:
         entity.on_pipeline_event = self._intercepted_on_pipeline_event
 
         self._active = True
+
+        # Detect if media player is from alexa_media integration
+        self._is_alexa = self._detect_alexa_media_player()
+
         _LOGGER.info(
-            "Interceptor active: %s → %s",
+            "Interceptor active: %s → %s%s",
             self._satellite_entity_id,
             self._media_player_entity_id,
+            " (Alexa TTS mode)" if self._is_alexa else "",
         )
 
         # Apply pipeline preference to the satellite
@@ -296,6 +307,16 @@ class PipelineInterceptor:
 
         return None
 
+    # -- Media player detection --
+
+    def _detect_alexa_media_player(self) -> bool:
+        """Check if the configured media player belongs to alexa_media."""
+        entity_reg = er.async_get(self.hass)
+        entry = entity_reg.async_get(self._media_player_entity_id)
+        if entry is not None and entry.platform == "alexa_media":
+            return True
+        return False
+
     # -- Pipeline event handling --
 
     @callback
@@ -335,13 +356,24 @@ class PipelineInterceptor:
 
         elif event_type == PipelineEventType.TTS_END:
             self._set_state(STATE_RESPONDING)
-            tts_output = data.get("tts_output", {})
-            tts_url = tts_output.get("url")
-            if tts_url:
-                _LOGGER.debug("TTS URL captured: %s", tts_url)
-                self.hass.async_create_task(
-                    self._play_tts_on_media_player(tts_url)
-                )
+            if self._is_alexa:
+                # Alexa doesn't support direct audio URL streaming.
+                # Use notify.alexa_media with the response text instead.
+                if self._last_response:
+                    _LOGGER.debug(
+                        "Alexa TTS via notify: %s", self._last_response
+                    )
+                    self.hass.async_create_task(
+                        self._speak_tts_via_alexa(self._last_response)
+                    )
+            else:
+                tts_output = data.get("tts_output", {})
+                tts_url = tts_output.get("url")
+                if tts_url:
+                    _LOGGER.debug("TTS URL captured: %s", tts_url)
+                    self.hass.async_create_task(
+                        self._play_tts_on_media_player(tts_url)
+                    )
 
         elif event_type == PipelineEventType.RUN_END:
             self._set_state(STATE_IDLE)
@@ -355,6 +387,31 @@ class PipelineInterceptor:
             self._set_state(STATE_ERROR)
 
     # -- TTS playback --
+
+    async def _speak_tts_via_alexa(self, message: str) -> None:
+        """Send TTS text to an Alexa device via notify.alexa_media."""
+        _LOGGER.debug(
+            "Speaking on Alexa %s: %s",
+            self._media_player_entity_id,
+            message,
+        )
+
+        try:
+            await self.hass.services.async_call(
+                "notify",
+                "alexa_media",
+                {
+                    "target": self._media_player_entity_id,
+                    "message": message,
+                    "data": {"type": "tts"},
+                },
+                blocking=True,
+            )
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception(
+                "Failed to speak TTS on Alexa %s",
+                self._media_player_entity_id,
+            )
 
     async def _play_tts_on_media_player(self, tts_url: str) -> None:
         """Play TTS audio on the configured media player."""
