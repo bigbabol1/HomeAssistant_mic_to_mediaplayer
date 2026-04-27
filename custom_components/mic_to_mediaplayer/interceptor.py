@@ -17,6 +17,7 @@ from homeassistant.helpers.entity_platform import async_get_platforms
 from homeassistant.helpers.network import get_url
 
 from .const import (
+    CONVERSATION_CLOSE_PHRASES,
     STATE_ERROR,
     STATE_IDLE,
     STATE_LISTENING,
@@ -361,7 +362,15 @@ class PipelineInterceptor:
                 intent_output.get("continue_conversation", False)
             )
             if self._continue_conversation:
-                _LOGGER.debug("Conversation flagged for follow-up")
+                close_match = self._match_close_phrase(self._last_text)
+                if close_match is not None:
+                    _LOGGER.debug(
+                        "Close phrase '%s' overrides agent — ending conversation",
+                        close_match,
+                    )
+                    self._continue_conversation = False
+                else:
+                    _LOGGER.debug("Conversation flagged for follow-up")
 
         elif event_type == PipelineEventType.TTS_END:
             self._set_state(STATE_RESPONDING)
@@ -394,6 +403,23 @@ class PipelineInterceptor:
                 data.get("message", ""),
             )
             self._set_state(STATE_ERROR)
+
+    # -- Close-phrase detection --
+
+    @staticmethod
+    def _match_close_phrase(text: str | None) -> str | None:
+        """Return the matched close phrase, or None.
+
+        Matches a phrase if it appears as a whitespace-bounded fragment in the
+        STT text. This avoids spurious matches like "stop" inside "stopwatch".
+        """
+        if not text:
+            return None
+        normalized = f" {text.strip().lower()} "
+        for phrase in CONVERSATION_CLOSE_PHRASES:
+            if f" {phrase} " in normalized:
+                return phrase
+        return None
 
     # -- TTS playback --
 
