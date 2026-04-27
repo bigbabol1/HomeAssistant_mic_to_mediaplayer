@@ -57,6 +57,7 @@ class PipelineInterceptor:
         self._state_listeners: list = []
         self._last_text: str | None = None
         self._last_response: str | None = None
+        self._continue_conversation: bool = False
 
     # -- Public properties --
 
@@ -354,6 +355,13 @@ class PipelineInterceptor:
             speech = response.get("speech", {})
             plain = speech.get("plain", {})
             self._last_response = plain.get("speech", "")
+            # Conversation agents set continue_conversation when expecting
+            # a follow-up reply without re-triggering the wake word.
+            self._continue_conversation = bool(
+                intent_output.get("continue_conversation", False)
+            )
+            if self._continue_conversation:
+                _LOGGER.debug("Conversation flagged for follow-up")
 
         elif event_type == PipelineEventType.TTS_END:
             self._set_state(STATE_RESPONDING)
@@ -460,6 +468,10 @@ class PipelineInterceptor:
         await self._wait_for_media_player_idle()
         self._signal_tts_finished()
 
+        if self._continue_conversation:
+            self._continue_conversation = False
+            await self._trigger_satellite_follow_up()
+
     async def _wait_for_media_player_idle(
         self, start_grace: float = 1.5, timeout: float = 60.0, poll: float = 0.5
     ) -> None:
@@ -535,3 +547,57 @@ class PipelineInterceptor:
                 _LOGGER.debug(
                     "Synthetic RUN_END dispatch failed", exc_info=True
                 )
+
+    async def _trigger_satellite_follow_up(self) -> None:
+        """Tell the satellite firmware to start a follow-up STT run.
+
+        ESPHome voice_assistant in pattern B (no local speaker) does not
+        auto-handle the pipeline's continue_conversation flag, because the
+        relevant state machine path only runs when a local audio sink is
+        configured. This calls a user-defined ESPHome API service so the
+        firmware can re-enter STT without requiring another wake-word.
+        """
+        entity_reg = er.async_get(self.hass)
+        registry_entry = entity_reg.async_get(self._satellite_entity_id)
+        if registry_entry is None or registry_entry.platform != "esphome":
+            _LOGGER.debug(
+                "Skipping follow-up trigger: %s is not an ESPHome satellite",
+                self._satellite_entity_id,
+            )
+            return
+
+        device_id = registry_entry.device_id
+        if device_id is None:
+            return
+
+        from homeassistant.helpers import device_registry as dr
+
+        device = dr.async_get(self.hass).async_get(device_id)
+        if device is None:
+            return
+
+        device_name = (device.name_by_user or device.name or "").strip()
+        if not device_name:
+            return
+
+        service_name = device_name.lower().replace(" ", "_").replace("-", "_") + "_start_follow_up"
+
+        if not self.hass.services.has_service("esphome", service_name):
+            _LOGGER.debug(
+                "ESPHome service esphome.%s not found — add `start_follow_up` "
+                "service to the device YAML to enable continue_conversation",
+                service_name,
+            )
+            return
+
+        try:
+            await self.hass.services.async_call(
+                "esphome", service_name, {}, blocking=False
+            )
+            _LOGGER.debug(
+                "Follow-up STT triggered via esphome.%s", service_name
+            )
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception(
+                "Failed to call esphome.%s for follow-up", service_name
+            )
