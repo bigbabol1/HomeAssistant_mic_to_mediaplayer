@@ -6,6 +6,7 @@ to capture TTS events and play them on a configured media player.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -414,7 +415,14 @@ class PipelineInterceptor:
             )
 
     async def _play_tts_on_media_player(self, tts_url: str) -> None:
-        """Play TTS audio on the configured media player."""
+        """Play TTS audio on the configured media player.
+
+        After playback finishes, signal the satellite that TTS is done so
+        the assist_satellite entity can transition out of the responding
+        state. Without this signal, the satellite remains stuck at
+        "responding" because play_media's blocking=True only waits for the
+        service call to return (URL queued), not for actual playback to end.
+        """
         # Make URL absolute if it's a relative path
         if tts_url.startswith("/"):
             try:
@@ -446,3 +454,84 @@ class PipelineInterceptor:
             _LOGGER.exception(
                 "Failed to play TTS on %s", self._media_player_entity_id
             )
+            self._signal_tts_finished()
+            return
+
+        await self._wait_for_media_player_idle()
+        self._signal_tts_finished()
+
+    async def _wait_for_media_player_idle(
+        self, start_grace: float = 1.5, timeout: float = 60.0, poll: float = 0.5
+    ) -> None:
+        """Wait until the media_player reports an idle/finished state.
+
+        Gives the player a brief grace period to begin playback, then polls
+        until it returns to idle/paused/off, or until timeout.
+        """
+        await asyncio.sleep(start_grace)
+
+        elapsed = 0.0
+        idle_states = {"idle", "paused", "off", "standby", "unknown", "unavailable"}
+        while elapsed < timeout:
+            state = self.hass.states.get(self._media_player_entity_id)
+            if state is None or state.state in idle_states:
+                return
+            await asyncio.sleep(poll)
+            elapsed += poll
+
+        _LOGGER.debug(
+            "Timeout waiting for %s to go idle (still %s)",
+            self._media_player_entity_id,
+            state.state if state else "<missing>",
+        )
+
+    def _signal_tts_finished(self) -> None:
+        """Tell the satellite that TTS playback has completed.
+
+        Tries known assist_satellite hooks first, then falls back to firing
+        a synthetic RUN_END through the original on_pipeline_event handler.
+        """
+        entity = self._satellite_entity
+        if entity is None:
+            return
+
+        for method_name in (
+            "tts_response_finished",
+            "_internal_on_tts_response_finished",
+            "async_on_tts_response_finished",
+        ):
+            method = getattr(entity, method_name, None)
+            if method is None:
+                continue
+            try:
+                result = method()
+                if asyncio.iscoroutine(result):
+                    self.hass.async_create_task(result)
+                _LOGGER.debug(
+                    "Signaled TTS finished via %s on %s",
+                    method_name,
+                    self._satellite_entity_id,
+                )
+                return
+            except Exception:  # noqa: BLE001
+                _LOGGER.debug(
+                    "Calling %s failed; trying next fallback",
+                    method_name,
+                    exc_info=True,
+                )
+
+        # Fallback: synthesize a RUN_END so the satellite's own state machine
+        # closes the pipeline. Only the original handler is invoked, since the
+        # interceptor itself already saw RUN_END from the real pipeline.
+        if self._original_on_pipeline_event:
+            try:
+                synthetic = PipelineEvent(PipelineEventType.RUN_END, {})
+                self._original_on_pipeline_event(synthetic)
+                _LOGGER.debug(
+                    "Signaled TTS finished via synthetic RUN_END on %s",
+                    self._satellite_entity_id,
+                )
+            except Exception:  # noqa: BLE001
+                _LOGGER.debug(
+                    "Synthetic RUN_END dispatch failed", exc_info=True
+                )
