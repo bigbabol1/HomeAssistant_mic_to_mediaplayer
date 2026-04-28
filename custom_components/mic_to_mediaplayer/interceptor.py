@@ -473,12 +473,14 @@ class PipelineInterceptor:
             await self._trigger_satellite_follow_up()
 
     async def _wait_for_media_player_idle(
-        self, start_grace: float = 1.5, timeout: float = 60.0, poll: float = 0.5
+        self, start_grace: float = 0.3, timeout: float = 60.0, poll: float = 0.1
     ) -> None:
         """Wait until the media_player reports an idle/finished state.
 
         Gives the player a brief grace period to begin playback, then polls
-        until it returns to idle/paused/off, or until timeout.
+        until it returns to idle/paused/off, or until timeout. Grace and
+        poll cadence are kept short so the satellite can re-enter STT for
+        a continue_conversation follow-up before the user starts speaking.
         """
         await asyncio.sleep(start_grace)
 
