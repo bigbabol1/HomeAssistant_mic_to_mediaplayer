@@ -468,9 +468,18 @@ class PipelineInterceptor:
         await self._wait_for_media_player_idle()
         self._signal_tts_finished()
 
-        if self._continue_conversation:
-            self._continue_conversation = False
-            await self._trigger_satellite_follow_up()
+        continue_flag = self._continue_conversation
+        self._continue_conversation = False
+
+        persistent_on = self._persistent_switch_on()
+
+        if persistent_on:
+            if continue_flag:
+                await self._call_esphome_service("start_follow_up")
+            else:
+                await self._call_esphome_service("end_persistent")
+        elif continue_flag:
+            await self._call_esphome_service("start_follow_up")
 
     async def _wait_for_media_player_idle(
         self, start_grace: float = 0.3, timeout: float = 60.0, poll: float = 0.1
@@ -550,44 +559,68 @@ class PipelineInterceptor:
                     "Synthetic RUN_END dispatch failed", exc_info=True
                 )
 
-    async def _trigger_satellite_follow_up(self) -> None:
-        """Tell the satellite firmware to start a follow-up STT run.
-
-        ESPHome voice_assistant in pattern B (no local speaker) does not
-        auto-handle the pipeline's continue_conversation flag, because the
-        relevant state machine path only runs when a local audio sink is
-        configured. This calls a user-defined ESPHome API service so the
-        firmware can re-enter STT without requiring another wake-word.
-        """
+    def _esphome_device_name(self) -> str | None:
+        """Return normalized ESPHome device name for service/entity lookup."""
         entity_reg = er.async_get(self.hass)
         registry_entry = entity_reg.async_get(self._satellite_entity_id)
         if registry_entry is None or registry_entry.platform != "esphome":
-            _LOGGER.debug(
-                "Skipping follow-up trigger: %s is not an ESPHome satellite",
-                self._satellite_entity_id,
-            )
-            return
+            return None
 
         device_id = registry_entry.device_id
         if device_id is None:
-            return
+            return None
 
         from homeassistant.helpers import device_registry as dr
 
         device = dr.async_get(self.hass).async_get(device_id)
         if device is None:
-            return
+            return None
 
         device_name = (device.name_by_user or device.name or "").strip()
         if not device_name:
+            return None
+
+        return device_name.lower().replace(" ", "_").replace("-", "_")
+
+    def _persistent_switch_on(self) -> bool:
+        """Read state of the satellite's persistent_conversation switch.
+
+        Returns False if switch missing (legacy firmware) — preserves old
+        behavior so older satellites keep working unchanged.
+        """
+        entity_reg = er.async_get(self.hass)
+        registry_entry = entity_reg.async_get(self._satellite_entity_id)
+        if registry_entry is None or registry_entry.device_id is None:
+            return False
+
+        for entry in er.async_entries_for_device(
+            entity_reg, registry_entry.device_id
+        ):
+            if entry.domain != "switch":
+                continue
+            if "persistent_conversation" not in entry.entity_id:
+                continue
+            state = self.hass.states.get(entry.entity_id)
+            if state is None:
+                return False
+            return state.state == "on"
+        return False
+
+    async def _call_esphome_service(self, service_suffix: str) -> None:
+        """Call esphome.<device>_<service_suffix> if registered."""
+        device_name = self._esphome_device_name()
+        if device_name is None:
+            _LOGGER.debug(
+                "Skipping esphome service: %s is not an ESPHome satellite",
+                self._satellite_entity_id,
+            )
             return
 
-        service_name = device_name.lower().replace(" ", "_").replace("-", "_") + "_start_follow_up"
+        service_name = f"{device_name}_{service_suffix}"
 
         if not self.hass.services.has_service("esphome", service_name):
             _LOGGER.debug(
-                "ESPHome service esphome.%s not found — add `start_follow_up` "
-                "service to the device YAML to enable continue_conversation",
+                "ESPHome service esphome.%s not found — add it to device YAML",
                 service_name,
             )
             return
@@ -596,10 +629,6 @@ class PipelineInterceptor:
             await self.hass.services.async_call(
                 "esphome", service_name, {}, blocking=False
             )
-            _LOGGER.debug(
-                "Follow-up STT triggered via esphome.%s", service_name
-            )
+            _LOGGER.debug("Triggered esphome.%s", service_name)
         except Exception:  # noqa: BLE001
-            _LOGGER.exception(
-                "Failed to call esphome.%s for follow-up", service_name
-            )
+            _LOGGER.exception("Failed to call esphome.%s", service_name)
