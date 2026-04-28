@@ -482,7 +482,7 @@ class PipelineInterceptor:
             await self._call_esphome_service("start_follow_up")
 
     async def _wait_for_media_player_idle(
-        self, start_grace: float = 0.3, timeout: float = 60.0, poll: float = 0.1
+        self, start_grace: float = 0.1, timeout: float = 60.0, poll: float = 0.05
     ) -> None:
         """Wait until the media_player reports an idle/finished state.
 
