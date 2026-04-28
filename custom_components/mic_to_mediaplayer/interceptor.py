@@ -482,16 +482,20 @@ class PipelineInterceptor:
             await self._call_esphome_service("start_follow_up")
 
     async def _wait_for_media_player_idle(
-        self, start_grace: float = 0.1, timeout: float = 60.0, poll: float = 0.05
+        self, start_grace: float = 0.0, timeout: float = 2.0, poll: float = 0.05
     ) -> None:
         """Wait until the media_player reports an idle/finished state.
 
-        Gives the player a brief grace period to begin playback, then polls
-        until it returns to idle/paused/off, or until timeout. Grace and
-        poll cadence are kept short so the satellite can re-enter STT for
-        a continue_conversation follow-up before the user starts speaking.
+        Some media_players (DLNA, Music Assistant proxies, generic local
+        amp endpoints) hold "playing" state for several seconds after the
+        audio actually ends. To keep follow-up STT responsive, this wait
+        is hard-capped to a short timeout — once it elapses, we signal
+        TTS finished anyway so the satellite can re-enter listening. The
+        default cap is chosen so that even a short 1-2s reply leaves
+        slack for the player to start; longer replies rely on the cap.
         """
-        await asyncio.sleep(start_grace)
+        if start_grace > 0:
+            await asyncio.sleep(start_grace)
 
         elapsed = 0.0
         idle_states = {"idle", "paused", "off", "standby", "unknown", "unavailable"}
