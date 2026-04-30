@@ -521,46 +521,88 @@ class PipelineInterceptor:
 
     async def _wait_for_media_player_idle(
         self,
-        start_grace: float = 0.3,
+        playing_grace: float = 3.0,
         timeout: float = 30.0,
         poll: float = 0.1,
-        post_idle_settle: float = 0.4,
+        stable_idle: float = 1.5,
     ) -> None:
-        """Wait until the media_player has actually finished playing TTS.
+        """Wait until media_player has fully finished TTS playback.
 
-        The previous 2s hard-cap let follow-up STT re-arm while the speaker
-        was still emitting audio, so pattern-B satellites (no AEC, no
-        echo cancellation) re-recognized their own TTS as user speech and
-        looped. We now wait until the player reports an idle state, with a
-        long safety cap, plus a short settle so the speaker buffer drains
-        before the mic re-opens.
+        Three phases:
 
-        ``start_grace`` lets us miss a slow play_media transition
-        (player still in the previous 'idle' state when we check).
-        ``post_idle_settle`` covers tail audio that some players keep
-        emitting briefly after dropping to 'idle'.
+        A. Confirm the player actually entered ``playing`` (or any non-idle
+           state). Bounded by ``playing_grace``. If it never leaves idle the
+           TTS was a no-op and we exit immediately.
+        B. Wait for the player to reach an idle state (bounded by ``timeout``).
+        C. Stable-idle window: keep polling for ``stable_idle`` seconds. If
+           the player flips back to ``playing`` mid-settle (chunked TTS, some
+           DLNA renderers oscillate idle↔playing between segments), jump back
+           to phase B. Return only after the state stays idle for the full
+           window.
+
+        Pattern-B satellites (no speaker, no AEC) re-recognise their own TTS
+        when the mic re-opens too soon, so we err on the side of waiting.
         """
-        if start_grace > 0:
-            await asyncio.sleep(start_grace)
-
-        elapsed = 0.0
         idle_states = {"idle", "paused", "off", "standby", "unknown", "unavailable"}
-        state = None
-        while elapsed < timeout:
-            state = self.hass.states.get(self._media_player_entity_id)
-            if state is None or state.state in idle_states:
-                if post_idle_settle > 0:
-                    await asyncio.sleep(post_idle_settle)
-                return
+
+        def _current() -> str | None:
+            s = self.hass.states.get(self._media_player_entity_id)
+            return s.state if s else None
+
+        # Phase A — confirm playing started
+        elapsed = 0.0
+        saw_playing = False
+        while elapsed < playing_grace:
+            if _current() not in idle_states:
+                saw_playing = True
+                break
             await asyncio.sleep(poll)
             elapsed += poll
 
+        if not saw_playing:
+            _LOGGER.debug(
+                "%s never left idle within %.1fs — treating TTS as already complete",
+                self._media_player_entity_id,
+                playing_grace,
+            )
+            return
+
+        # Phases B + C — wait for idle, confirm it stays idle
+        wait_elapsed = 0.0
+        while wait_elapsed < timeout:
+            # Phase B — wait until idle
+            while wait_elapsed < timeout and _current() not in idle_states:
+                await asyncio.sleep(poll)
+                wait_elapsed += poll
+
+            if wait_elapsed >= timeout:
+                break
+
+            # Phase C — confirm idle stays for stable_idle window
+            settle_elapsed = 0.0
+            stayed_idle = True
+            while settle_elapsed < stable_idle:
+                await asyncio.sleep(poll)
+                settle_elapsed += poll
+                wait_elapsed += poll
+                if _current() not in idle_states:
+                    _LOGGER.debug(
+                        "%s flipped back to playing after %.1fs of settle — resuming wait",
+                        self._media_player_entity_id,
+                        settle_elapsed,
+                    )
+                    stayed_idle = False
+                    break
+
+            if stayed_idle:
+                return
+
         _LOGGER.warning(
-            "Timeout (%.1fs) waiting for %s to go idle (still %s) — "
+            "Timeout (%.1fs) waiting for %s to reach stable idle (last state %s) — "
             "follow-up may capture residual TTS audio",
             timeout,
             self._media_player_entity_id,
-            state.state if state else "<missing>",
+            _current() or "<missing>",
         )
 
     def _signal_tts_finished(self) -> None:
