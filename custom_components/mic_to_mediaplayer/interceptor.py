@@ -14,6 +14,7 @@ from homeassistant.components.assist_pipeline import PipelineEvent, PipelineEven
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import async_get_platforms
+from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.network import get_url
 
 from .const import (
@@ -51,6 +52,7 @@ class PipelineInterceptor:
         self._original_on_pipeline_event: Any = None
         self._active = False
         self._is_alexa: bool = False
+        self._unsub_entity_watch: Any = None
 
         # State tracking
         self._state = STATE_IDLE
@@ -137,11 +139,7 @@ class PipelineInterceptor:
             )
             return False
 
-        self._satellite_entity = entity
-        self._original_on_pipeline_event = entity.on_pipeline_event
-
-        # Replace on_pipeline_event on the instance (not the class)
-        entity.on_pipeline_event = self._intercepted_on_pipeline_event
+        self._patch_entity(entity)
 
         self._active = True
 
@@ -155,14 +153,54 @@ class PipelineInterceptor:
             " (Alexa TTS mode)" if self._is_alexa else "",
         )
 
+        # Watch for entity instance replacement (ESPHome reconnect, integration
+        # reload). Keeps the patch attached to the live entity rather than a
+        # stale Python object that no longer receives pipeline events.
+        if self._unsub_entity_watch is None:
+            self._unsub_entity_watch = async_track_state_change_event(
+                self.hass,
+                [self._satellite_entity_id],
+                self._on_satellite_state_change,
+            )
+
         # Apply pipeline preference to the satellite
         if self._pipeline_id:
             await self._apply_pipeline_preference()
 
         return True
 
+    def _patch_entity(self, entity: Any) -> None:
+        """Install the intercept on the given satellite entity instance."""
+        self._satellite_entity = entity
+        self._original_on_pipeline_event = entity.on_pipeline_event
+        entity.on_pipeline_event = self._intercepted_on_pipeline_event
+
+    @callback
+    def _on_satellite_state_change(self, event) -> None:
+        """Re-patch when the underlying entity instance is replaced.
+
+        ESPHome reconnects (wifi blip, OTA, integration reload) recreate the
+        assist_satellite entity object. The original patch lives on the
+        orphaned instance and silently stops receiving events. Detect drift
+        on every state_changed and re-attach to the live instance.
+        """
+        if not self._active:
+            return
+        current = self._find_satellite_entity()
+        if current is None or current is self._satellite_entity:
+            return
+        _LOGGER.warning(
+            "Satellite entity '%s' replaced — re-patching interceptor",
+            self._satellite_entity_id,
+        )
+        self._patch_entity(current)
+
     async def async_stop(self) -> None:
         """Restore the original on_pipeline_event and clean up."""
+        if self._unsub_entity_watch is not None:
+            self._unsub_entity_watch()
+            self._unsub_entity_watch = None
+
         if self._satellite_entity and self._original_on_pipeline_event:
             self._satellite_entity.on_pipeline_event = (
                 self._original_on_pipeline_event
@@ -563,28 +601,51 @@ class PipelineInterceptor:
                     "Synthetic RUN_END dispatch failed", exc_info=True
                 )
 
-    def _esphome_device_name(self) -> str | None:
-        """Return normalized ESPHome device name for service/entity lookup."""
+    def _esphome_device_name_candidates(self) -> list[str]:
+        """Return possible ESPHome service-name prefixes, in priority order.
+
+        ESPHome registers services as ``esphome.<firmware_name_slug>_<svc>``,
+        where ``firmware_name_slug`` derives from the YAML ``esphome.name``
+        field (not the user-friendly device name). Renaming the device in
+        the HA UI changes ``name_by_user`` but does NOT change the registered
+        service name. To stay correct across renames, try every plausible
+        slug source and let the caller pick one that resolves.
+        """
         entity_reg = er.async_get(self.hass)
         registry_entry = entity_reg.async_get(self._satellite_entity_id)
         if registry_entry is None or registry_entry.platform != "esphome":
-            return None
+            return []
 
+        candidates: list[str] = []
+
+        def _add(value: str | None) -> None:
+            if not value:
+                return
+            slug = value.strip().lower().replace(" ", "_").replace("-", "_")
+            if slug and slug not in candidates:
+                candidates.append(slug)
+
+        # Strategy 1: derive from the satellite entity_id stem. ESPHome creates
+        # entities as `<firmware_name>_<object_id>`, so stripping the known
+        # assist_satellite suffixes recovers the firmware name slug. This
+        # matches the actual service registration regardless of UI renames.
+        object_id = self._satellite_entity_id.split(".", 1)[-1]
+        for suffix in ("_assist_satellit", "_assist_satellite", "_satellite"):
+            if object_id.endswith(suffix):
+                _add(object_id[: -len(suffix)])
+                break
+
+        # Strategy 2: device registry — try firmware name first, then user override.
         device_id = registry_entry.device_id
-        if device_id is None:
-            return None
+        if device_id is not None:
+            from homeassistant.helpers import device_registry as dr
 
-        from homeassistant.helpers import device_registry as dr
+            device = dr.async_get(self.hass).async_get(device_id)
+            if device is not None:
+                _add(device.name)
+                _add(device.name_by_user)
 
-        device = dr.async_get(self.hass).async_get(device_id)
-        if device is None:
-            return None
-
-        device_name = (device.name_by_user or device.name or "").strip()
-        if not device_name:
-            return None
-
-        return device_name.lower().replace(" ", "_").replace("-", "_")
+        return candidates
 
     def _persistent_switch_on(self) -> bool:
         """Read state of the satellite's persistent_conversation switch.
@@ -612,20 +673,28 @@ class PipelineInterceptor:
 
     async def _call_esphome_service(self, service_suffix: str) -> None:
         """Call esphome.<device>_<service_suffix> if registered."""
-        device_name = self._esphome_device_name()
-        if device_name is None:
+        candidates = self._esphome_device_name_candidates()
+        if not candidates:
             _LOGGER.debug(
                 "Skipping esphome service: %s is not an ESPHome satellite",
                 self._satellite_entity_id,
             )
             return
 
-        service_name = f"{device_name}_{service_suffix}"
+        service_name: str | None = None
+        for prefix in candidates:
+            name = f"{prefix}_{service_suffix}"
+            if self.hass.services.has_service("esphome", name):
+                service_name = name
+                break
 
-        if not self.hass.services.has_service("esphome", service_name):
+        if service_name is None:
             _LOGGER.debug(
-                "ESPHome service esphome.%s not found — add it to device YAML",
-                service_name,
+                "ESPHome service esphome.<%s>_%s not found (tried %s) — "
+                "add it to device YAML",
+                "|".join(candidates),
+                service_suffix,
+                candidates,
             )
             return
 
