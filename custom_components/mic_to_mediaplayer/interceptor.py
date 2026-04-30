@@ -520,32 +520,45 @@ class PipelineInterceptor:
             await self._call_esphome_service("start_follow_up")
 
     async def _wait_for_media_player_idle(
-        self, start_grace: float = 0.0, timeout: float = 2.0, poll: float = 0.05
+        self,
+        start_grace: float = 0.3,
+        timeout: float = 30.0,
+        poll: float = 0.1,
+        post_idle_settle: float = 0.4,
     ) -> None:
-        """Wait until the media_player reports an idle/finished state.
+        """Wait until the media_player has actually finished playing TTS.
 
-        Some media_players (DLNA, Music Assistant proxies, generic local
-        amp endpoints) hold "playing" state for several seconds after the
-        audio actually ends. To keep follow-up STT responsive, this wait
-        is hard-capped to a short timeout — once it elapses, we signal
-        TTS finished anyway so the satellite can re-enter listening. The
-        default cap is chosen so that even a short 1-2s reply leaves
-        slack for the player to start; longer replies rely on the cap.
+        The previous 2s hard-cap let follow-up STT re-arm while the speaker
+        was still emitting audio, so pattern-B satellites (no AEC, no
+        echo cancellation) re-recognized their own TTS as user speech and
+        looped. We now wait until the player reports an idle state, with a
+        long safety cap, plus a short settle so the speaker buffer drains
+        before the mic re-opens.
+
+        ``start_grace`` lets us miss a slow play_media transition
+        (player still in the previous 'idle' state when we check).
+        ``post_idle_settle`` covers tail audio that some players keep
+        emitting briefly after dropping to 'idle'.
         """
         if start_grace > 0:
             await asyncio.sleep(start_grace)
 
         elapsed = 0.0
         idle_states = {"idle", "paused", "off", "standby", "unknown", "unavailable"}
+        state = None
         while elapsed < timeout:
             state = self.hass.states.get(self._media_player_entity_id)
             if state is None or state.state in idle_states:
+                if post_idle_settle > 0:
+                    await asyncio.sleep(post_idle_settle)
                 return
             await asyncio.sleep(poll)
             elapsed += poll
 
-        _LOGGER.debug(
-            "Timeout waiting for %s to go idle (still %s)",
+        _LOGGER.warning(
+            "Timeout (%.1fs) waiting for %s to go idle (still %s) — "
+            "follow-up may capture residual TTS audio",
+            timeout,
             self._media_player_entity_id,
             state.state if state else "<missing>",
         )
