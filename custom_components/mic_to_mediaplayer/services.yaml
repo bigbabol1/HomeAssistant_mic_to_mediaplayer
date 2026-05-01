@@ -1,0 +1,46 @@
+announce:
+  name: Announce
+  description: >-
+    Speak a message (or play an audio URL) on the speaker that this Mic2MP
+    instance routes assistant TTS to. Uses announce mode so any music currently
+    playing is interrupted and resumed automatically.
+  fields:
+    satellite_entity_id:
+      name: Satellite entity
+      description: >-
+        Optional. The assist_satellite entity that identifies which Mic2MP
+        instance to route through. Only required if you have more than one
+        Mic2MP instance configured.
+      example: assist_satellite.seeed_mic1
+      selector:
+        entity:
+          domain: assist_satellite
+    message:
+      name: Message
+      description: Text to speak via TTS. Provide either this or audio_url.
+      example: "Timer Pasta is fertig"
+      selector:
+        text:
+    audio_url:
+      name: Audio URL
+      description: >-
+        Direct media URL to play (chime, MP3, etc.). Provide either this or
+        message. If both are given, audio_url wins.
+      example: /local/sounds/timer_done.mp3
+      selector:
+        text:
+    tts_entity_id:
+      name: TTS engine
+      description: >-
+        Optional TTS entity for synthesizing the message. Defaults to the first
+        available tts.* entity in HA.
+      example: tts.piper
+      selector:
+        entity:
+          domain: tts
+    language:
+      name: Language
+      description: Optional TTS language code (e.g. de, en).
+      example: de
+      selector:
+        text:

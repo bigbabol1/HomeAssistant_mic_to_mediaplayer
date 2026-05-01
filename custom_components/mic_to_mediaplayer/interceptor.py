@@ -493,6 +493,7 @@ class PipelineInterceptor:
                     "entity_id": self._media_player_entity_id,
                     "media_content_id": tts_url,
                     "media_content_type": "music",
+                    "announce": True,
                 },
                 blocking=True,
             )
@@ -518,6 +519,108 @@ class PipelineInterceptor:
                 await self._call_esphome_service("end_persistent")
         elif continue_flag:
             await self._call_esphome_service("start_follow_up")
+
+    async def async_play_announcement(
+        self,
+        message: str | None = None,
+        audio_url: str | None = None,
+        tts_entity_id: str | None = None,
+        language: str | None = None,
+    ) -> None:
+        """Play a one-shot announcement on the configured media_player.
+
+        Used by external triggers (timer-finished, doorbell, etc.) that want to
+        speak on the same speaker that handles assistant TTS, with announce-mode
+        ducking so any music currently playing is interrupted and resumed.
+
+        Either ``message`` (TTS-synthesized) or ``audio_url`` (direct media URL)
+        must be supplied. If both, ``audio_url`` wins.
+
+        For ``message``, ``tts_entity_id`` selects the TTS engine; if omitted,
+        we ask HA to pick the system default. The TTS is rendered through
+        ``tts.speak`` which writes a temp media URL and dispatches play_media
+        with ``announce: true``.
+        """
+        if not (message or audio_url):
+            _LOGGER.warning(
+                "announce on %s called with neither message nor audio_url; ignoring",
+                self._media_player_entity_id,
+            )
+            return
+
+        if audio_url:
+            if audio_url.startswith("/"):
+                try:
+                    base_url = get_url(self.hass)
+                    audio_url = f"{base_url}{audio_url}"
+                except Exception:  # noqa: BLE001
+                    _LOGGER.debug(
+                        "Could not resolve HA base URL for announcement; using relative"
+                    )
+            try:
+                await self.hass.services.async_call(
+                    "media_player",
+                    "play_media",
+                    {
+                        "entity_id": self._media_player_entity_id,
+                        "media_content_id": audio_url,
+                        "media_content_type": "music",
+                        "announce": True,
+                    },
+                    blocking=True,
+                )
+                _LOGGER.debug(
+                    "Played announcement audio on %s: %s",
+                    self._media_player_entity_id,
+                    audio_url,
+                )
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception(
+                    "Failed to play announcement audio on %s",
+                    self._media_player_entity_id,
+                )
+            return
+
+        if not tts_entity_id:
+            tts_entity_id = self._default_tts_entity_id()
+        if not tts_entity_id:
+            _LOGGER.warning(
+                "No TTS entity available for announcement on %s; message=%r",
+                self._media_player_entity_id,
+                message,
+            )
+            return
+
+        data: dict[str, Any] = {
+            "entity_id": tts_entity_id,
+            "media_player_entity_id": self._media_player_entity_id,
+            "message": message,
+            "options": {"announce": True},
+        }
+        if language:
+            data["language"] = language
+        try:
+            await self.hass.services.async_call(
+                "tts", "speak", data, blocking=True
+            )
+            _LOGGER.debug(
+                "Spoke announcement on %s via %s: %r",
+                self._media_player_entity_id,
+                tts_entity_id,
+                message,
+            )
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception(
+                "Failed to speak announcement on %s via %s",
+                self._media_player_entity_id,
+                tts_entity_id,
+            )
+
+    def _default_tts_entity_id(self) -> str | None:
+        """Pick a sensible TTS entity: first available tts.* entity in HA."""
+        for state in self.hass.states.async_all("tts"):
+            return state.entity_id
+        return None
 
     async def _wait_for_media_player_idle(
         self,

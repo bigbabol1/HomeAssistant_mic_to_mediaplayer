@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import logging
 
+import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant, ServiceCall, callback
+from homeassistant.helpers import config_validation as cv
 
 from .const import (
     CONF_MEDIA_PLAYER,
@@ -23,10 +25,70 @@ from .interceptor import PipelineInterceptor
 
 _LOGGER = logging.getLogger(__name__)
 
+SERVICE_ANNOUNCE = "announce"
+ANNOUNCE_SCHEMA = vol.Schema(
+    vol.All(
+        {
+            vol.Optional("satellite_entity_id"): cv.entity_id,
+            vol.Optional("message"): cv.string,
+            vol.Optional("audio_url"): cv.string,
+            vol.Optional("tts_entity_id"): cv.entity_id,
+            vol.Optional("language"): cv.string,
+        },
+        cv.has_at_least_one_key("message", "audio_url"),
+    )
+)
+
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Mic to MediaPlayer from a config entry."""
     hass.data.setdefault(DOMAIN, {})
+
+    # Register the announce service once, on first config entry setup.
+    if not hass.services.has_service(DOMAIN, SERVICE_ANNOUNCE):
+        async def _handle_announce(call: ServiceCall) -> None:
+            satellite_id = call.data.get("satellite_entity_id")
+            interceptors: list[PipelineInterceptor] = list(
+                hass.data.get(DOMAIN, {}).values()
+            )
+            if not interceptors:
+                _LOGGER.warning("announce called but no Mic2MP instances are active")
+                return
+
+            target: PipelineInterceptor | None = None
+            if satellite_id:
+                for ic in interceptors:
+                    if ic.satellite_entity_id == satellite_id:
+                        target = ic
+                        break
+                if target is None:
+                    _LOGGER.warning(
+                        "announce: no Mic2MP instance is bound to satellite %s "
+                        "(known: %s)",
+                        satellite_id,
+                        [ic.satellite_entity_id for ic in interceptors],
+                    )
+                    return
+            else:
+                if len(interceptors) > 1:
+                    _LOGGER.warning(
+                        "announce called without satellite_entity_id but %d "
+                        "Mic2MP instances exist; using the first (%s)",
+                        len(interceptors),
+                        interceptors[0].satellite_entity_id,
+                    )
+                target = interceptors[0]
+
+            await target.async_play_announcement(
+                message=call.data.get("message"),
+                audio_url=call.data.get("audio_url"),
+                tts_entity_id=call.data.get("tts_entity_id"),
+                language=call.data.get("language"),
+            )
+
+        hass.services.async_register(
+            DOMAIN, SERVICE_ANNOUNCE, _handle_announce, schema=ANNOUNCE_SCHEMA
+        )
 
     satellite_entity_id = entry.data[CONF_SATELLITE_ENTITY]
     media_player_entity_id = entry.data[CONF_MEDIA_PLAYER]
@@ -114,5 +176,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     if unload_ok:
         hass.data[DOMAIN].pop(entry.entry_id, None)
+        if not hass.data[DOMAIN] and hass.services.has_service(DOMAIN, SERVICE_ANNOUNCE):
+            hass.services.async_remove(DOMAIN, SERVICE_ANNOUNCE)
 
     return unload_ok
