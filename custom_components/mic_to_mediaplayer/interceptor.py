@@ -27,6 +27,26 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+# Suffixes HA appends to an assist_satellite object_id. German installs use
+# "Assist-Satellit" (no trailing e); English uses "Assist satellite".
+_SATELLITE_SUFFIXES = ("_assist_satellit", "_assist_satellite", "_satellite")
+
+
+def _satellite_node_stem(entity_id: str) -> str:
+    """Recover the ESPHome node-name slug embedded in a satellite entity_id.
+
+    Fleet SmartMic firmware builds its announce target from the mac-suffixed
+    ``App.get_name()`` as ``assist_satellite.<node_slug>_assist_satellit`` —
+    which never equals HA's friendly-name-derived object_id. Stripping the
+    domain and the satellite suffix recovers ``<node_slug>`` so announce can
+    route by ESPHome device instead of an exact entity_id match.
+    """
+    object_id = entity_id.split(".", 1)[-1]
+    for suffix in _SATELLITE_SUFFIXES:
+        if object_id.endswith(suffix):
+            return object_id[: -len(suffix)]
+    return object_id
+
 
 class PipelineInterceptor:
     """Intercept pipeline events from a satellite and play TTS on a media player.
@@ -82,6 +102,27 @@ class PipelineInterceptor:
     def satellite_entity_id(self) -> str:
         """Return the monitored satellite entity ID."""
         return self._satellite_entity_id
+
+    def matches_satellite_id(self, satellite_id: str) -> bool:
+        """Return True if this interceptor serves the given satellite entity_id.
+
+        Exact entity_id wins. Falls back to the ESPHome node-name slug so that
+        fleet firmware — which sends ``assist_satellite.<mac_node>_assist_satellit``
+        derived from ``App.get_name()`` rather than HA's friendly-name object_id
+        — still routes to the correct Mic2MP instance.
+        """
+        if satellite_id == self._satellite_entity_id:
+            return True
+        stem = _satellite_node_stem(satellite_id)
+        if stem and stem in self._esphome_device_name_candidates():
+            _LOGGER.debug(
+                "Routed announce target %s → %s via ESPHome node slug %r",
+                satellite_id,
+                self._satellite_entity_id,
+                stem,
+            )
+            return True
+        return False
 
     @property
     def media_player_entity_id(self) -> str:
@@ -788,7 +829,7 @@ class PipelineInterceptor:
         # assist_satellite suffixes recovers the firmware name slug. This
         # matches the actual service registration regardless of UI renames.
         object_id = self._satellite_entity_id.split(".", 1)[-1]
-        for suffix in ("_assist_satellit", "_assist_satellite", "_satellite"):
+        for suffix in _SATELLITE_SUFFIXES:
             if object_id.endswith(suffix):
                 _add(object_id[: -len(suffix)])
                 break

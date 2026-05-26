@@ -58,12 +58,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             target: PipelineInterceptor | None = None
             if satellite_id:
                 for ic in interceptors:
-                    if ic.satellite_entity_id == satellite_id:
+                    if ic.matches_satellite_id(satellite_id):
                         target = ic
                         break
                 if target is None:
                     _LOGGER.warning(
-                        "announce: no Mic2MP instance is bound to satellite %s "
+                        "announce: no Mic2MP instance matches satellite %s "
                         "(known: %s)",
                         satellite_id,
                         [ic.satellite_entity_id for ic in interceptors],
