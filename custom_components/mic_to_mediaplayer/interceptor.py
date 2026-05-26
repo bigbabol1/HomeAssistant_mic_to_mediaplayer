@@ -632,11 +632,15 @@ class PipelineInterceptor:
             )
             return
 
+        # NB: ``announce`` is a media_player.play_media parameter, NOT a tts
+        # option — passing it under ``options`` makes tts.speak raise
+        # "Invalid options found: ['announce']" and nothing is spoken. tts.speak
+        # renders + plays on the media_player directly; announce-mode ducking is
+        # omitted here to stay robust across every media_player type.
         data: dict[str, Any] = {
             "entity_id": tts_entity_id,
             "media_player_entity_id": self._media_player_entity_id,
             "message": message,
-            "options": {"announce": True},
         }
         if language:
             data["language"] = language
