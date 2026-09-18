@@ -1,94 +1,94 @@
 # Mic to MediaPlayer
 
-Hier ist sie endlich - die Integration, die es dir ermöglicht deine Assist-Pipeline so zu konfigurieren, wie du es möchtest!
+Here it finally is: the integration that lets you set up your Assist pipeline exactly the way you want!
 
-Home Assistant Custom Integration: Nutze jede **Assist Satellite** Entität (z.B. die **Assist Microphone** App, Wyoming Satellites, ESPHome Satellites) als Spracheingabe und spiele die TTS-Antwort des Assistenten auf einem beliebigen **Media Player** ab.
+Home Assistant custom integration: use any **Assist Satellite** entity (e.g. the **Assist Microphone** app, Wyoming satellites, ESPHome satellites) for voice input and play the assistant's TTS response on any **media player**.
 
 ## Features
 
-- **Jeder Assist Satellite nutzbar**: Funktioniert mit allen `assist_satellite`-Entitäten – Assist Microphone App, Wyoming Satellites, ESPHome Voice Satellites, VoIP Satellites
-- **Flexible Media-Player-Ausgabe**: TTS-Antwort wird auf einem frei wählbaren Media Player abgespielt (Sonos, Google Cast, DLNA, etc.)
-- **Nicht-invasiv**: Klinkt sich über Instance-Level Patching in die bestehende Satellite-Entität ein, ohne globale Funktionen zu ändern
-- **Status-Sensor**: Zeigt den aktuellen Pipeline-Status (Bereit, Höre zu, Verarbeite, Antwort, Fehler) sowie den letzten erkannten Text und die Antwort
-- **Automatische Erkennung**: Wartet bei HA-Start automatisch auf die Verfügbarkeit der Satellite-Entität
-- **Mehrfach konfigurierbar**: Mehrere Satellite → Media Player Zuordnungen gleichzeitig möglich
-- **HACS-kompatibel**: Einfache Installation über HACS
+- **Works with any Assist Satellite**: supports every `assist_satellite` entity: the Assist Microphone app, Wyoming satellites, ESPHome voice satellites, VoIP satellites
+- **Flexible media player output**: the TTS response plays on a media player of your choice (Sonos, Google Cast, DLNA, etc.)
+- **Non-invasive**: hooks into the existing satellite entity via instance-level patching, without changing any global functions
+- **Status sensor**: shows the current pipeline status (ready, listening, processing, responding, error) along with the last recognized text and the response
+- **Automatic detection**: on Home Assistant startup, automatically waits for the satellite entity to become available
+- **Multiple instances**: several satellite → media player mappings can run at the same time
+- **HACS-compatible**: easy installation via HACS
 
-## Voraussetzungen
+## Requirements
 
-- Home Assistant 2024.10.0 oder neuer (für `assist_satellite`-Unterstützung)
-- Eine konfigurierte `assist_satellite`-Entität, z.B.:
-  - [Assist Microphone](https://www.home-assistant.io/voice_control/android/) (HA Companion App)
+- Home Assistant 2024.10.0 or newer (for `assist_satellite` support)
+- A configured `assist_satellite` entity, e.g.:
+  - [Assist Microphone](https://www.home-assistant.io/voice_control/android/) (HA Companion app)
   - [Wyoming Satellite](https://github.com/rhasspy/wyoming-satellite)
   - [ESPHome Voice Satellite](https://esphome.io/components/voice_assistant/)
-- Eine konfigurierte Assist-Pipeline mit STT und TTS (z.B. Whisper + Piper)
-- Ein Media Player in Home Assistant
+- A configured Assist pipeline with STT and TTS (e.g. Whisper + Piper)
+- A media player in Home Assistant
 
 ## Installation
 
-### HACS (empfohlen)
+### HACS (recommended)
 
-1. Öffne HACS in Home Assistant
-2. Klicke auf "Integrationen" → "Benutzerdefinierte Repositories"
-3. Füge `https://github.com/bigbabol1/HomeAssistant_mic_to_mediaplayer` als Repository hinzu (Kategorie: Integration)
-4. Installiere "Mic to MediaPlayer"
-5. Starte Home Assistant neu
+1. Open HACS in Home Assistant
+2. Click "Integrations" → "Custom repositories"
+3. Add `https://github.com/bigbabol1/HomeAssistant_mic_to_mediaplayer` as a repository (category: Integration)
+4. Install "Mic to MediaPlayer"
+5. Restart Home Assistant
 
-### Manuell
+### Manual
 
-1. Kopiere den Ordner `custom_components/mic_to_mediaplayer` in dein Home Assistant `config/custom_components/` Verzeichnis
-2. Starte Home Assistant neu
+1. Copy the `custom_components/mic_to_mediaplayer` folder into your Home Assistant `config/custom_components/` directory
+2. Restart Home Assistant
 
-## Einrichtung
+## Setup
 
-1. Gehe zu **Einstellungen** → **Geräte & Dienste** → **Integration hinzufügen**
-2. Suche nach "Mic to MediaPlayer"
-3. Konfiguriere:
-   - **Assist Satellite**: Wähle die Satellite-Entität (z.B. dein Smartphone mit der Assist Microphone App)
-   - **Media Player**: Wähle den Media Player für die TTS-Ausgabe
+1. Go to **Settings** → **Devices & services** → **Add integration**
+2. Search for "Mic to MediaPlayer"
+3. Configure:
+   - **Assist Satellite**: select the satellite entity (e.g. your smartphone running the Assist Microphone app)
+   - **Media Player**: select the media player for TTS output
 
-Das war's! Die Integration klinkt sich automatisch in die Pipeline-Events der gewählten Satellite-Entität ein und spielt jede TTS-Antwort auf dem Media Player ab.
+That's it! The integration automatically hooks into the pipeline events of the selected satellite entity and plays every TTS response on the media player.
 
-## Funktionsweise
+## How it works
 
 ```
-Assist Satellite (Mikrofon)
+Assist Satellite (microphone)
         │
-        │ Spracheingabe → Assist Pipeline (STT → Conversation → TTS)
+        │ Voice input → Assist pipeline (STT → Conversation → TTS)
         │
-        ├──→ Satellite spielt TTS ab (normal)
+        ├──→ Satellite plays TTS (as usual)
         │
-        └──→ [Mic to MediaPlayer] fängt TTS-URL ab
+        └──→ [Mic to MediaPlayer] intercepts the TTS URL
                        │
                        ↓
                   Media Player ♪
 ```
 
-Die Integration nutzt **Instance-Level Patching** auf der `on_pipeline_event`-Methode der gewählten Satellite-Entität. Dadurch:
-- Werden Pipeline-Events (STT, Intent, TTS) abgefangen
-- Wird die TTS-URL bei Generierung erfasst
-- Wird die TTS-Audio auf dem Media Player abgespielt
-- Bleibt das Original-Verhalten des Satellites vollständig erhalten
+The integration uses **instance-level patching** on the `on_pipeline_event` method of the selected satellite entity. As a result:
+- Pipeline events (STT, intent, TTS) are intercepted
+- The TTS URL is captured as soon as it is generated
+- The TTS audio is played on the media player
+- The satellite's original behavior is fully preserved
 
-## Status-Sensor
+## Status sensor
 
-Der Sensor `sensor.*_pipeline_status` zeigt:
+The `sensor.*_pipeline_status` sensor reports the following states (the state values themselves are currently in German):
 
-| Status | Bedeutung |
+| State | Meaning |
 |---|---|
-| **Bereit** | Wartet auf Spracheingabe |
-| **Höre zu...** | Sprache wird aufgenommen |
-| **Verarbeite...** | STT und Conversation laufen |
-| **Antwort wird abgespielt** | TTS wird auf dem Media Player abgespielt |
-| **Fehler** | Ein Fehler ist aufgetreten |
+| **Bereit** | Ready, waiting for voice input |
+| **Höre zu...** | Listening, speech is being recorded |
+| **Verarbeite...** | Processing, STT and conversation are running |
+| **Antwort wird abgespielt** | Responding, TTS is playing on the media player |
+| **Fehler** | Error, something went wrong |
 
-**Zusätzliche Attribute:**
-- `last_speech_text`: Letzter erkannter Sprachtext
-- `last_response`: Letzte Antwort des Assistenten
-- `satellite_entity`: Die überwachte Satellite-Entität
-- `media_player_entity`: Der Ziel-Media-Player
-- `interceptor_active`: Ob die Interception aktiv ist
+**Additional attributes:**
+- `last_speech_text`: last recognized speech text
+- `last_response`: the assistant's last response
+- `satellite_entity`: the monitored satellite entity
+- `media_player_entity`: the target media player
+- `interceptor_active`: whether interception is active
 
-## Lizenz
+## License
 
-MIT License – siehe [LICENSE](LICENSE)
+MIT License, see [LICENSE](LICENSE)
