@@ -31,6 +31,19 @@ _LOGGER = logging.getLogger(__name__)
 # "Assist-Satellit" (no trailing e); English uses "Assist satellite".
 _SATELLITE_SUFFIXES = ("_assist_satellit", "_assist_satellite", "_satellite")
 
+_IDLE_STATES = {"idle", "paused", "off", "standby", "unknown", "unavailable"}
+_POLL_S = 0.1
+# The player must stay idle this long before the satellite hears that the
+# reply has ended: pattern-B satellites (no speaker, no AEC) re-open their
+# mic on that signal, and some renderers flip idle/playing between chunks.
+_STABLE_IDLE_S = 1.5
+# A play_media call that took at least this long played the audio before
+# returning (Music Assistant announcements block until they end); a faster
+# one only queued it, and the player still has to be watched afterwards.
+_BLOCKED_THROUGH_S = 2.0
+# Stop polling a play call that has run this long; it is then awaited.
+_WATCH_LIMIT_S = 120.0
+
 
 def _satellite_node_stem(entity_id: str) -> str:
     """Recover the ESPHome node-name slug embedded in a satellite entity_id.
@@ -80,6 +93,9 @@ class PipelineInterceptor:
         self._last_text: str | None = None
         self._last_response: str | None = None
         self._continue_conversation: bool = False
+        # Counts pipeline runs, so a reply that ends after the next run has
+        # started does not signal into that run.
+        self._run_seq: int = 0
 
     # -- Public properties --
 
@@ -418,7 +434,10 @@ class PipelineInterceptor:
         event_type = event.type
         data = event.data or {}
 
-        if event_type == PipelineEventType.STT_START:
+        if event_type == PipelineEventType.RUN_START:
+            self._run_seq += 1
+
+        elif event_type == PipelineEventType.STT_START:
             self._set_state(STATE_LISTENING)
 
         elif event_type == PipelineEventType.STT_END:
@@ -459,8 +478,14 @@ class PipelineInterceptor:
                 tts_url = tts_output.get("url")
                 if tts_url:
                     _LOGGER.debug("TTS URL captured: %s", tts_url)
+                    # The follow-up flag belongs to this run; read after
+                    # playback, it could already be the next run's.
+                    continue_flag = self._continue_conversation
+                    self._continue_conversation = False
                     self.hass.async_create_task(
-                        self._play_tts_on_media_player(tts_url)
+                        self._play_tts_on_media_player(
+                            tts_url, self._run_seq, continue_flag
+                        )
                     )
 
         elif event_type == PipelineEventType.RUN_END:
@@ -501,7 +526,9 @@ class PipelineInterceptor:
                 self._media_player_entity_id,
             )
 
-    async def _play_tts_on_media_player(self, tts_url: str) -> None:
+    async def _play_tts_on_media_player(
+        self, tts_url: str, run_seq: int, continue_flag: bool
+    ) -> None:
         """Play TTS audio on the configured media player.
 
         After playback finishes, signal the satellite that TTS is done so
@@ -509,6 +536,12 @@ class PipelineInterceptor:
         state. Without this signal, the satellite remains stuck at
         "responding" because play_media's blocking=True only waits for the
         service call to return (URL queued), not for actual playback to end.
+
+        The player is watched while the call runs. Music Assistant's call
+        blocks until about 2 s after the announcement ends; waiting for it
+        and then for a "playing" state that had already come and gone
+        signalled ~5 s after the audio stopped (measured 2026-10-28), and
+        once into the next question's run.
         """
         # Make URL absolute if it's a relative path
         if tts_url.startswith("/"):
@@ -526,8 +559,13 @@ class PipelineInterceptor:
             tts_url,
         )
 
-        try:
-            await self.hass.services.async_call(
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        # Already playing (music in the room): the state cannot show when
+        # the reply ends, and a pause around it would look like the end.
+        music = self._player_busy()
+        call = self.hass.async_create_task(
+            self.hass.services.async_call(
                 "media_player",
                 "play_media",
                 {
@@ -538,18 +576,42 @@ class PipelineInterceptor:
                 },
                 blocking=True,
             )
-        except Exception:  # noqa: BLE001
-            _LOGGER.exception(
-                "Failed to play TTS on %s", self._media_player_entity_id
+        )
+        quiet_since = None if music else await self._watch_until_quiet(call)
+
+        if quiet_since is not None and not call.done():
+            call.add_done_callback(self._log_play_failure)
+            _LOGGER.debug(
+                "%s played the reply and went quiet before its play call returned",
+                self._media_player_entity_id,
             )
-            self._signal_tts_finished()
+        else:
+            try:
+                await call
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception(
+                    "Failed to play TTS on %s", self._media_player_entity_id
+                )
+                if self._run_seq == run_seq:
+                    self._signal_tts_finished()
+                return
+            if loop.time() - started < _BLOCKED_THROUGH_S:
+                # The call only queued the audio: watch the player play it.
+                await self._wait_for_media_player_idle()
+            elif not music:
+                # Blocked through playback: settle what is left of the
+                # stable-idle window.
+                settled = loop.time() - (quiet_since or loop.time())
+                if settled < _STABLE_IDLE_S:
+                    await asyncio.sleep(_STABLE_IDLE_S - settled)
+
+        if self._run_seq != run_seq:
+            _LOGGER.debug(
+                "A new run started on %s during the reply; not signalling its end",
+                self._satellite_entity_id,
+            )
             return
-
-        await self._wait_for_media_player_idle()
         self._signal_tts_finished()
-
-        continue_flag = self._continue_conversation
-        self._continue_conversation = False
 
         persistent_on = self._persistent_switch_on()
 
@@ -667,6 +729,42 @@ class PipelineInterceptor:
             return state.entity_id
         return None
 
+    def _player_busy(self) -> bool:
+        state = self.hass.states.get(self._media_player_entity_id)
+        return state is not None and state.state not in _IDLE_STATES
+
+    async def _watch_until_quiet(self, call: asyncio.Task) -> float | None:
+        """Poll the player while ``call`` runs.
+
+        Returns the loop time at which the player went quiet after playing,
+        once it has stayed quiet for _STABLE_IDLE_S, or while the call was
+        still settling that window when it returned; None when the player
+        was never seen playing before the call returned.
+        """
+        loop = asyncio.get_running_loop()
+        give_up = loop.time() + _WATCH_LIMIT_S
+        seen_playing = False
+        quiet_since: float | None = None
+        while not call.done() and loop.time() < give_up:
+            if self._player_busy():
+                seen_playing = True
+                quiet_since = None
+            elif seen_playing:
+                if quiet_since is None:
+                    quiet_since = loop.time()
+                elif loop.time() - quiet_since >= _STABLE_IDLE_S:
+                    return quiet_since
+            await asyncio.wait({call}, timeout=_POLL_S)
+        return quiet_since
+
+    def _log_play_failure(self, call: asyncio.Task) -> None:
+        if not call.cancelled() and call.exception() is not None:
+            _LOGGER.error(
+                "Play call on %s failed after the reply had played: %s",
+                self._media_player_entity_id,
+                call.exception(),
+            )
+
     async def _wait_for_media_player_idle(
         self,
         playing_grace: float = 3.0,
@@ -691,7 +789,7 @@ class PipelineInterceptor:
         Pattern-B satellites (no speaker, no AEC) re-recognise their own TTS
         when the mic re-opens too soon, so we err on the side of waiting.
         """
-        idle_states = {"idle", "paused", "off", "standby", "unknown", "unavailable"}
+        idle_states = _IDLE_STATES
 
         def _current() -> str | None:
             s = self.hass.states.get(self._media_player_entity_id)
