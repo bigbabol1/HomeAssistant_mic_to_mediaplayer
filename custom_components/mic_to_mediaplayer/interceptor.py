@@ -492,8 +492,11 @@ class PipelineInterceptor:
             self._set_state(STATE_IDLE)
 
         elif event_type == PipelineEventType.ERROR:
+            # The satellite is named because a duplicate wake-up does not say
+            # which satellite lost to which: HA keeps the first one to arrive.
             _LOGGER.error(
-                "Pipeline error: %s - %s",
+                "Pipeline error on %s: %s - %s",
+                self._satellite_entity_id,
                 data.get("code", "unknown"),
                 data.get("message", ""),
             )
