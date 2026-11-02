@@ -8,8 +8,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from typing import Any
+from urllib.parse import urlparse
 
+from homeassistant.components import tts
 from homeassistant.components.assist_pipeline import PipelineEvent, PipelineEventType
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
@@ -18,6 +21,10 @@ from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.network import get_url
 
 from .const import (
+    OUTPUT_FORMAT_AUTO,
+    OUTPUT_FORMAT_MP3,
+    OUTPUT_FORMAT_ORIGINAL,
+    OUTPUT_FORMAT_WAV,
     STATE_ERROR,
     STATE_IDLE,
     STATE_LISTENING,
@@ -43,6 +50,9 @@ _STABLE_IDLE_S = 1.5
 _BLOCKED_THROUGH_S = 2.0
 # Stop polling a play call that has run this long; it is then awaited.
 _WATCH_LIMIT_S = 120.0
+# Sonos announcements only accept these (HA's sonos/media_player.py); other
+# formats fail silently, and satellites commonly ask the pipeline for FLAC.
+_SONOS_ANNOUNCE_FORMATS = frozenset({OUTPUT_FORMAT_MP3, OUTPUT_FORMAT_WAV})
 
 
 def _satellite_node_stem(entity_id: str) -> str:
@@ -75,16 +85,19 @@ class PipelineInterceptor:
         satellite_entity_id: str,
         media_player_entity_id: str,
         pipeline_id: str | None = None,
+        output_format: str = OUTPUT_FORMAT_AUTO,
     ) -> None:
         """Initialize the interceptor."""
         self.hass = hass
         self._satellite_entity_id = satellite_entity_id
         self._media_player_entity_id = media_player_entity_id
         self._pipeline_id = pipeline_id
+        self._output_format = output_format
         self._satellite_entity: Any = None
         self._original_on_pipeline_event: Any = None
         self._active = False
         self._is_alexa: bool = False
+        self._is_sonos: bool = False
         self._unsub_entity_watch: Any = None
 
         # State tracking
@@ -93,6 +106,9 @@ class PipelineInterceptor:
         self._last_text: str | None = None
         self._last_response: str | None = None
         self._continue_conversation: bool = False
+        # What the current run's TTS stage will say. None when there is no
+        # text to speak again, e.g. the run answers with a chime.
+        self._tts_text: str | None = None
         # Counts pipeline runs, so a reply that ends after the next run has
         # started does not signal into that run.
         self._run_seq: int = 0
@@ -202,6 +218,7 @@ class PipelineInterceptor:
 
         # Detect if media player is from alexa_media integration
         self._is_alexa = self._detect_alexa_media_player()
+        self._is_sonos = self._media_player_platform() == "sonos"
 
         _LOGGER.info(
             "Interceptor active: %s → %s%s",
@@ -408,11 +425,12 @@ class PipelineInterceptor:
 
     def _detect_alexa_media_player(self) -> bool:
         """Check if the configured media player belongs to alexa_media."""
-        entity_reg = er.async_get(self.hass)
-        entry = entity_reg.async_get(self._media_player_entity_id)
-        if entry is not None and entry.platform == "alexa_media":
-            return True
-        return False
+        return self._media_player_platform() == "alexa_media"
+
+    def _media_player_platform(self) -> str | None:
+        """Return the integration that provides the configured media player."""
+        entry = er.async_get(self.hass).async_get(self._media_player_entity_id)
+        return entry.platform if entry is not None else None
 
     # -- Pipeline event handling --
 
@@ -436,6 +454,7 @@ class PipelineInterceptor:
 
         if event_type == PipelineEventType.RUN_START:
             self._run_seq += 1
+            self._tts_text = None
 
         elif event_type == PipelineEventType.STT_START:
             self._set_state(STATE_LISTENING)
@@ -461,6 +480,13 @@ class PipelineInterceptor:
             if self._continue_conversation:
                 _LOGGER.debug("Conversation flagged for follow-up")
 
+        elif event_type == PipelineEventType.TTS_START:
+            # With an override the run plays a chime and this text is never
+            # spoken, so it must not be synthesized for the media player.
+            self._tts_text = (
+                None if data.get("acknowledge_override") else data.get("tts_input")
+            )
+
         elif event_type == PipelineEventType.TTS_END:
             self._set_state(STATE_RESPONDING)
             if self._is_alexa:
@@ -478,6 +504,7 @@ class PipelineInterceptor:
                 tts_url = tts_output.get("url")
                 if tts_url:
                     _LOGGER.debug("TTS URL captured: %s", tts_url)
+                    tts_url = self._url_in_output_format(tts_url, tts_output)
                     # The follow-up flag belongs to this run; read after
                     # playback, it could already be the next run's.
                     continue_flag = self._continue_conversation
@@ -503,6 +530,58 @@ class PipelineInterceptor:
             self._set_state(STATE_ERROR)
 
     # -- TTS playback --
+
+    def _wanted_format(self, tts_url: str) -> str | None:
+        """Return the format the player needs, or None to keep the URL as is."""
+        extension = os.path.splitext(urlparse(tts_url).path)[1].lstrip(".").lower()
+        if self._output_format == OUTPUT_FORMAT_ORIGINAL:
+            return None
+        if self._output_format == OUTPUT_FORMAT_AUTO:
+            if self._is_sonos and extension not in _SONOS_ANNOUNCE_FORMATS:
+                return OUTPUT_FORMAT_MP3
+            return None
+        return None if extension == self._output_format else self._output_format
+
+    def _url_in_output_format(self, tts_url: str, tts_output: dict[str, Any]) -> str:
+        """Return a URL for the reply in the format the media player needs.
+
+        The pipeline's audio is in the format the satellite asked for, so the
+        reply is synthesized again for the player, with the same engine,
+        language and voice. The satellite's own stream stays untouched: some
+        satellites only handle the format they asked for. Anything that goes
+        wrong leaves the original URL, as a reply in the wrong format can
+        still play and no reply cannot.
+        """
+        wanted = self._wanted_format(tts_url)
+        if wanted is None:
+            return tts_url
+        if not self._tts_text:
+            _LOGGER.debug("No text to synthesize as %s; keeping %s", wanted, tts_url)
+            return tts_url
+        try:
+            source = tts.async_get_stream(self.hass, tts_output["token"])
+            if source is None:
+                raise LookupError("the pipeline's TTS stream is gone")
+            options = {
+                key: value
+                for key, value in source.options.items()
+                if not key.startswith("preferred_")
+            }
+            options[tts.ATTR_PREFERRED_FORMAT] = wanted
+            stream = tts.async_create_stream(
+                self.hass, source.engine, source.language, options
+            )
+            stream.async_set_message(self._tts_text)
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.warning(
+                "Could not create %s audio for %s, playing the original format: %s",
+                wanted,
+                self._media_player_entity_id,
+                err,
+            )
+            return tts_url
+        _LOGGER.debug("Playing %s audio instead: %s", wanted, stream.url)
+        return stream.url
 
     async def _speak_tts_via_alexa(self, message: str) -> None:
         """Send TTS text to an Alexa device via notify.alexa_media."""

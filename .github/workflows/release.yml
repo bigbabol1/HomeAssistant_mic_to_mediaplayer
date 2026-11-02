@@ -16,8 +16,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # HACS installs from this asset (hacs.json zip_release), so GitHub's
+      # download_count on it is the install/update counter. Files sit at the
+      # zip root, as HACS extracts it straight into
+      # custom_components/mic_to_mediaplayer.
+      - name: Build HACS zip
+        run: git archive --format=zip -o mic_to_mediaplayer.zip "HEAD:custom_components/mic_to_mediaplayer"
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
+          files: mic_to_mediaplayer.zip
           generate_release_notes: true
           make_latest: true

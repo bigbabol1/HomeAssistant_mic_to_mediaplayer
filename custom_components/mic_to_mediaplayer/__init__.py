@@ -16,9 +16,11 @@ from homeassistant.helpers import config_validation as cv
 
 from .const import (
     CONF_MEDIA_PLAYER,
+    CONF_OUTPUT_FORMAT,
     CONF_PIPELINE_ID,
     CONF_SATELLITE_ENTITY,
     DOMAIN,
+    OUTPUT_FORMAT_AUTO,
     PLATFORMS,
 )
 from .interceptor import PipelineInterceptor
@@ -90,12 +92,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             DOMAIN, SERVICE_ANNOUNCE, _handle_announce, schema=ANNOUNCE_SCHEMA
         )
 
-    satellite_entity_id = entry.data[CONF_SATELLITE_ENTITY]
-    media_player_entity_id = entry.data[CONF_MEDIA_PLAYER]
-    pipeline_id = entry.data.get(CONF_PIPELINE_ID)
+    # The options flow saves to entry.options, over what setup stored in data.
+    settings = {**entry.data, **entry.options}
+    satellite_entity_id = settings[CONF_SATELLITE_ENTITY]
+    media_player_entity_id = settings[CONF_MEDIA_PLAYER]
+    pipeline_id = settings.get(CONF_PIPELINE_ID)
+    output_format = settings.get(CONF_OUTPUT_FORMAT, OUTPUT_FORMAT_AUTO)
 
     interceptor = PipelineInterceptor(
-        hass, satellite_entity_id, media_player_entity_id, pipeline_id
+        hass, satellite_entity_id, media_player_entity_id, pipeline_id, output_format
     )
     hass.data[DOMAIN][entry.entry_id] = interceptor
 
@@ -131,7 +136,7 @@ def _setup_retry_listener(
     hass: HomeAssistant, entry: ConfigEntry, interceptor: PipelineInterceptor
 ) -> None:
     """Listen for the specific satellite entity to appear and retry attaching."""
-    satellite_entity_id = entry.data[CONF_SATELLITE_ENTITY]
+    satellite_entity_id = interceptor.satellite_entity_id
     retry_logged = False
 
     @callback
