@@ -27,8 +27,22 @@
         "data": {
           "satellite_entity_id": "Assist Satellite (Mikrofon-Quelle)",
           "media_player_entity_id": "Media Player (TTS-Ausgabe)",
-          "pipeline_id": "Sprachassistent / Pipeline"
+          "pipeline_id": "Sprachassistent / Pipeline",
+          "output_format": "Audioformat für den Media Player"
+        },
+        "data_description": {
+          "output_format": "Auto wandelt nur um, wo es nötig ist: Antworten an einen Sonos-Lautsprecher werden zu MP3, weil Sonos-Durchsagen kein FLAC abspielen. Eine umgewandelte Antwort wird ein zweites Mal synthetisiert, was ein kostenpflichtiger TTS-Dienst doppelt berechnet."
         }
+      }
+    }
+  },
+  "selector": {
+    "output_format": {
+      "options": {
+        "auto": "Auto (empfohlen)",
+        "mp3": "MP3",
+        "wav": "WAV",
+        "original": "Original (was der Satellite angefordert hat)"
       }
     }
   }

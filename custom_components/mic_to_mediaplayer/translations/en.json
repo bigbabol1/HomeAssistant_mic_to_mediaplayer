@@ -27,8 +27,22 @@
         "data": {
           "satellite_entity_id": "Assist Satellite (microphone source)",
           "media_player_entity_id": "Media Player (TTS output)",
-          "pipeline_id": "Voice Assistant / Pipeline"
+          "pipeline_id": "Voice Assistant / Pipeline",
+          "output_format": "Audio format for the media player"
+        },
+        "data_description": {
+          "output_format": "Auto converts only where needed: replies to a Sonos speaker become MP3, because Sonos announcements do not play FLAC. A converted reply is synthesized a second time, which a paid TTS service bills twice."
         }
+      }
+    }
+  },
+  "selector": {
+    "output_format": {
+      "options": {
+        "auto": "Auto (recommended)",
+        "mp3": "MP3",
+        "wav": "WAV",
+        "original": "Original (what the satellite requested)"
       }
     }
   }

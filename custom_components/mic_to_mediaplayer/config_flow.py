@@ -14,9 +14,12 @@ from homeassistant.helpers import selector
 
 from .const import (
     CONF_MEDIA_PLAYER,
+    CONF_OUTPUT_FORMAT,
     CONF_PIPELINE_ID,
     CONF_SATELLITE_ENTITY,
     DOMAIN,
+    OUTPUT_FORMAT_AUTO,
+    OUTPUT_FORMATS,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -127,7 +130,7 @@ class MicToMediaPlayerOptionsFlow(OptionsFlow):
                 user_input[CONF_PIPELINE_ID] = None
             return self.async_create_entry(title="", data=user_input)
 
-        current = self._config_entry.data
+        current = {**self._config_entry.data, **self._config_entry.options}
         pipeline_options = _get_pipeline_options(self.hass)
 
         data_schema = vol.Schema(
@@ -151,6 +154,16 @@ class MicToMediaPlayerOptionsFlow(OptionsFlow):
                     selector.SelectSelectorConfig(
                         options=pipeline_options,
                         mode=selector.SelectSelectorMode.DROPDOWN,
+                    )
+                ),
+                vol.Optional(
+                    CONF_OUTPUT_FORMAT,
+                    default=current.get(CONF_OUTPUT_FORMAT, OUTPUT_FORMAT_AUTO),
+                ): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=OUTPUT_FORMATS,
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                        translation_key=CONF_OUTPUT_FORMAT,
                     )
                 ),
             }

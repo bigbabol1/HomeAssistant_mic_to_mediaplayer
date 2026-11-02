@@ -49,6 +49,18 @@ Home Assistant custom integration: use any **Assist Satellite** entity (e.g. the
 
 That's it! The integration automatically hooks into the pipeline events of the selected satellite entity and plays every TTS response on the media player.
 
+## Audio format
+
+Satellites ask the pipeline for the format they can play themselves, often FLAC, and not every media player accepts it. Sonos announcements, for example, only play MP3 and WAV. Under **Configure** on the integration entry you can choose the format sent to the media player:
+
+| Option | What it does |
+|---|---|
+| **Auto** (default) | Sonos speakers get MP3. Every other player gets the original format. |
+| **MP3** / **WAV** | The player always gets this format. |
+| **Original** | The player always gets what the satellite requested. |
+
+When the format changes, the reply is synthesized a second time, because the satellite keeps its own audio. A paid TTS service therefore bills that reply twice. If this fails, the original format is played. A Music Assistant player is not treated as Sonos, as Music Assistant handles the format itself.
+
 ## How it works
 
 ```
